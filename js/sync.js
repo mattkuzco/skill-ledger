@@ -168,7 +168,11 @@ async function storageFetch(path, { method = 'GET', body, headers = {} } = {}) {
   }
   if (!res.ok) {
     const j = await res.json().catch(() => null);
-    throw Object.assign(new Error(j?.message || j?.error || `Errore file ${res.status}`), { status: res.status });
+    const msg = j?.message || j?.error || `Errore file ${res.status}`;
+    if (/bucket not found/i.test(msg)) {
+      throw Object.assign(new Error('Su Supabase manca lo spazio "attachments" per foto e PDF. Esegui di nuovo supabase/schema.sql nel SQL Editor: le note si sincronizzano comunque, le foto appena lo crei.'), { status: res.status });
+    }
+    throw Object.assign(new Error(msg), { status: res.status });
   }
   return res;
 }
