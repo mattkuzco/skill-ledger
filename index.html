@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Skill Ledger</title>
+  <meta name="description" content="Impara, prendi appunti e ripassa con flashcard e quiz. Funziona offline e si sincronizza tra i dispositivi.">
+  <meta name="theme-color" content="#F4F6F9">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Skill Ledger">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip" href="#main">Vai al contenuto</a>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="#/"><img src="icons/icon.svg" alt="" width="28" height="28"><span>Skill Ledger</span></a>
+      <nav class="side-nav" aria-label="Sezioni">
+        <a href="#/" data-nav="home"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11.5 12 5l8 6.5V20a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1z"/></svg>Oggi</a>
+        <a href="#/areas" data-nav="areas"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg>Aree</a>
+        <a href="#/study" data-nav="study"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7l9-4 9 4-9 4zM7 9.5V15c0 1.5 2.5 3 5 3s5-1.5 5-3V9.5"/></svg>Studia</a>
+        <a href="#/log" data-nav="log"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V10M10 20V4M15 20v-7M20 20v-4"/></svg>Registro</a>
+        <a href="#/settings" data-nav="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>Impostazioni</a>
+      </nav>
+      <a class="sync-badge" href="#/settings" data-sync-badge><i></i><span>Solo su questo dispositivo</span></a>
+    </aside>
+
+    <header class="topbar">
+      <a class="brand" href="#/"><img src="icons/icon.svg" alt="" width="24" height="24"><span>Skill Ledger</span></a>
+      <a class="sync-badge" href="#/settings" data-sync-badge><i></i><span>Solo su questo dispositivo</span></a>
+    </header>
+
+    <main id="main" tabindex="-1"><p class="loading">Caricamento…</p></main>
+
+    <nav class="tabbar" aria-label="Sezioni">
+      <a href="#/" data-nav="home"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11.5 12 5l8 6.5V20a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1z"/></svg><span>Oggi</span></a>
+      <a href="#/areas" data-nav="areas"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg><span>Aree</span></a>
+      <a href="#/study" data-nav="study"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7l9-4 9 4-9 4zM7 9.5V15c0 1.5 2.5 3 5 3s5-1.5 5-3V9.5"/></svg><span>Studia</span></a>
+      <a href="#/log" data-nav="log"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V10M10 20V4M15 20v-7M20 20v-4"/></svg><span>Registro</span></a>
+      <a href="#/settings" data-nav="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg><span>Altro</span></a>
+    </nav>
+  </div>
+  <div id="modal-root"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
