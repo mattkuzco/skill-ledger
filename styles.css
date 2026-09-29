@@ -614,3 +614,21 @@ body.board-mode .topbar, body.board-mode .tabbar { display: none; }
 .pdf-open .btn .ico, .link-main .ico { margin-right: 4px; }
 .board-hint.error-hint b { color: var(--danger); }
 @media (max-width: 700px) { .pdf-title { max-width: 60vw; order: 3; flex-basis: 100%; } }
+
+/* ---------- export / import ---------- */
+.export-form .seg { flex-wrap: wrap; }
+.export-summary { margin: 14px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--sunk); font-size: 14px; }
+.export-summary .warn { color: var(--warn, #9A6A00); }
+.export-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0 8px; }
+.import-formats { margin: 12px 0 16px; padding-left: 18px; display: grid; gap: 8px; font-size: 14px; line-height: 1.45; }
+.import-formats code { font-size: 12.5px; padding: 1px 5px; border-radius: 5px; background: var(--sunk); }
+.import-sum { display: flex; gap: 12px; margin: 12px 0; }
+.import-sum > div { flex: 1; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); display: flex; align-items: baseline; gap: 8px; }
+.import-sum b { font: 700 26px/1 var(--f-display, inherit); }
+.import-list { margin-top: 14px; }
+.import-list h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 6px; }
+.import-item { display: flex; flex-direction: column; gap: 3px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.import-item span { white-space: pre-line; }
+.import-skipped { margin-top: 14px; font-size: 13.5px; }
+.import-skipped summary { cursor: pointer; color: var(--warn, #9A6A00); font-weight: 600; }
+.import-skipped ul { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 4px; max-height: 180px; overflow: auto; }

@@ -98,7 +98,7 @@ export function render() {
       <div class="seg" role="radiogroup" aria-label="Tema">${[['system', 'Sistema'], ['light', 'Chiaro'], ['dark', 'Scuro']].map(([k, l]) => `<label><input type="radio" name="theme" value="${k}" data-change="theme" ${k === theme ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div>
       ${standalone ? '<span class="sync-pill ok"><i></i>App installata</span>' : installEvent ? '<button class="btn primary" data-action="install">Installa app</button>' : ''}
     </div>
-    <p class="hint mono">Versione ${APP_VERSION} · FSRS, quaderno, allegati e link, appunti sui PDF (PDF.js 6.3)</p>
+    <p class="hint mono">Versione ${APP_VERSION} · FSRS, quaderno, allegati e link, appunti sui PDF, esportazione PDF del quaderno, importazione da Excel/CSV/JSON (PDF.js 6.3)</p>
     ${standalone ? '' : `<p class="hint">Per installarla: su Chrome/Edge usa il pulsante "Installa" nella barra degli indirizzi; su iPhone apri in Safari → Condividi → "Aggiungi alla schermata Home"; su Android menu ⋮ → "Installa app".</p>`}
   </section>`;
 }

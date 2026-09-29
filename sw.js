@@ -2,7 +2,7 @@
 // everything else (Supabase, Anthropic API) goes straight to the network.
 // Bump VERSION whenever you change a file so installed apps pick up the update.
 
-const VERSION = 'v12';
+const VERSION = 'v13';
 const SHELL = `skill-ledger-shell-${VERSION}`;
 const FONTS = 'skill-ledger-fonts';
 // PDF.js lives in a folder named after its version and never changes, so it gets its own cache
@@ -16,6 +16,8 @@ const FILES = [
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/maskable-512.png', './icons/apple-touch-icon.png',
   './js/app.js', './js/router.js', './js/store.js', './js/sync.js', './js/srs.js', './js/ai.js', './js/md.js',
   './js/ui.js', './js/util.js', './js/seed.js', './js/attachments.js', './js/ink.js', './js/board.js', './js/pdfdoc.js',
+  './js/pdfwrite.js', './js/boardexport.js', './js/importer.js',
+  './templates/modello-flashcard-quiz.xlsx', './templates/modello-flashcard-quiz.json',
   './js/views/home.js', './js/views/areas.js', './js/views/topic.js', './js/views/study.js', './js/views/log.js', './js/views/settings.js',
 ];
 

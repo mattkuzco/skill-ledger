@@ -1,0 +1,34 @@
+{
+  "istruzioni": "Due elenchi: 'flashcard' (fronte e retro) e 'quiz' (domanda, opzioni, corretta, spiegazione facoltativa). In 'corretta' metti la lettera (\"B\") o il testo della risposta giusta; se usi un numero, conta da 0 (0 = la prima opzione). Vanno bene anche i nomi inglesi: flashcards/front/back e questions/question/options/answer/explanation.",
+  "flashcard": [
+    {
+      "fronte": "Complessità di Dijkstra con una coda di priorità (heap binario)",
+      "retro": "O((V + E) log V)"
+    },
+    {
+      "fronte": "Che cos'è la fotosintesi?",
+      "retro": "Il processo con cui le piante usano luce, acqua e CO₂ per produrre glucosio e ossigeno."
+    }
+  ],
+  "quiz": [
+    {
+      "domanda": "Quale struttura dati rende efficiente l'algoritmo di Dijkstra?",
+      "opzioni": [
+        "Pila",
+        "Coda di priorità",
+        "Lista concatenata",
+        "Tabella hash"
+      ],
+      "corretta": "B",
+      "spiegazione": "Serve estrarre ogni volta il nodo con la distanza minima: la coda di priorità lo fa in tempo logaritmico."
+    },
+    {
+      "domanda": "L'acqua bolle a 100 °C al livello del mare.",
+      "opzioni": [
+        "Vero",
+        "Falso"
+      ],
+      "corretta": "Vero"
+    }
+  ]
+}

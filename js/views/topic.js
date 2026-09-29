@@ -121,21 +121,21 @@ function notesTab(t, notes) {
 function cardsTab(t, cards) {
   const sorted = cards.slice().sort((a, b) => (a.srs?.due || '').localeCompare(b.srs?.due || ''));
   return `<section>
-    <div class="sec-head"><h2>Flashcard</h2><div class="btn-group"><button class="btn" data-action="ai-open" data-topic="${t.id}" data-mode="cards">✦ Genera con AI</button><button class="btn primary" data-action="card-new" data-topic="${t.id}">+ Flashcard</button></div></div>
+    <div class="sec-head"><h2>Flashcard</h2><div class="btn-group"><button class="btn" data-action="import-open" data-topic="${t.id}" data-mode="cards">⤒ Importa</button><button class="btn" data-action="ai-open" data-topic="${t.id}" data-mode="cards">✦ Genera con AI</button><button class="btn primary" data-action="card-new" data-topic="${t.id}">+ Flashcard</button></div></div>
     ${sorted.length ? `<div class="list">${sorted.map((c) => `
       <button class="list-row fc-row" data-action="card-edit" data-id="${c.id}">
         <span class="fc-front">${esc(c.front)}</span>
         <span class="fc-back muted">${esc(c.back)}</span>
         <span class="small mono ${isCardDue(c) ? 'warn' : 'muted'}">${isCardDue(c) ? 'da ripassare' : relDue(c.srs.due)}</span>
       </button>`).join('')}</div>`
-      : emptyState('Nessuna flashcard', 'Una flashcard è una domanda su un lato e la risposta sull\'altro. Scrivila tu o generala dalle tue note.', `<button class="btn primary" data-action="card-new" data-topic="${t.id}">+ Flashcard</button><button class="btn" data-action="ai-open" data-topic="${t.id}" data-mode="cards">✦ Genera con AI</button>`)}
+      : emptyState('Nessuna flashcard', 'Una flashcard è una domanda su un lato e la risposta sull\'altro. Scrivila tu, generala dalle tue note o importala da Excel, CSV o JSON.', `<button class="btn primary" data-action="card-new" data-topic="${t.id}">+ Flashcard</button><button class="btn" data-action="ai-open" data-topic="${t.id}" data-mode="cards">✦ Genera con AI</button><button class="btn" data-action="import-open" data-topic="${t.id}" data-mode="cards">⤒ Importa</button>`)}
   </section>`;
 }
 
 function quizTab(t, qs) {
   const attempts = store.all('attempt').filter((a) => a.scope === 'topic:' + t.id).sort((a, b) => b.updated_at - a.updated_at).slice(0, 3);
   return `<section>
-    <div class="sec-head"><h2>Domande del quiz</h2><div class="btn-group"><button class="btn" data-action="ai-open" data-topic="${t.id}" data-mode="quiz">✦ Genera con AI</button><button class="btn primary" data-action="question-new" data-topic="${t.id}">+ Domanda</button></div></div>
+    <div class="sec-head"><h2>Domande del quiz</h2><div class="btn-group"><button class="btn" data-action="import-open" data-topic="${t.id}" data-mode="quiz">⤒ Importa</button><button class="btn" data-action="ai-open" data-topic="${t.id}" data-mode="quiz">✦ Genera con AI</button><button class="btn primary" data-action="question-new" data-topic="${t.id}">+ Domanda</button></div></div>
     ${attempts.length ? `<p class="muted small">Ultimi risultati: ${attempts.map((a) => `<b class="mono">${a.score}/${a.total}</b> (${fmtDate(a.date)})`).join(' · ')}</p>` : ''}
     ${qs.length ? `<div class="list">${qs.map((q, i) => `
       <button class="list-row q-row" data-action="question-edit" data-id="${q.id}">
@@ -143,7 +143,7 @@ function quizTab(t, qs) {
         <span class="grow">${esc(q.question)}<span class="small muted block">Risposta: ${esc(q.options[q.answer] || '')}</span></span>
       </button>`).join('')}</div>
       <div class="row gap top-gap"><a class="btn primary" href="#/study/quiz?scope=topic:${t.id}">Avvia quiz (${plural(qs.length, 'domanda', 'domande')})</a></div>`
-      : emptyState('Nessuna domanda', 'Le domande a scelta multipla ti dicono subito se hai capito davvero. Scrivile tu o generale dalle note.', `<button class="btn primary" data-action="question-new" data-topic="${t.id}">+ Domanda</button><button class="btn" data-action="ai-open" data-topic="${t.id}" data-mode="quiz">✦ Genera con AI</button>`)}
+      : emptyState('Nessuna domanda', 'Le domande a scelta multipla ti dicono subito se hai capito davvero. Scrivile tu, generale dalle note o importale da Excel, CSV o JSON.', `<button class="btn primary" data-action="question-new" data-topic="${t.id}">+ Domanda</button><button class="btn" data-action="ai-open" data-topic="${t.id}" data-mode="quiz">✦ Genera con AI</button><button class="btn" data-action="import-open" data-topic="${t.id}" data-mode="quiz">⤒ Importa</button>`)}
   </section>`;
 }
 
@@ -444,6 +444,7 @@ export function renderBoard(topicId) {
       <a class="btn ghost" href="#/topic/${t.id}">← ${esc(t.title)}</a>
       <span class="small muted" data-board-saved>Salvato</span>
       <div class="btn-group push">
+        <button class="btn sm" data-action="board-export" data-topic="${t.id}" title="Esporta il quaderno in PDF">⤓ PDF</button>
         <button class="btn sm" data-action="board-transcribe" data-topic="${t.id}">✦ Trascrivi</button>
         <button class="btn sm" data-action="ai-open" data-topic="${t.id}" data-mode="both" data-board="1">✦ Flashcard e quiz</button>
       </div>
@@ -523,6 +524,127 @@ export async function leaveBoard() {
   boardEditor = null;
 }
 
+/* ---------- import flashcards and quiz ---------- */
+let pendingImport = null;
+const IMPORT_ACCEPT = '.xlsx,.csv,.tsv,.txt,.json,application/json,text/csv,text/tab-separated-values,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+function importHelp(topicId, mode = 'cards') {
+  const t = store.get(topicId);
+  openModal(`
+    <div class="import-help">
+      <h2>Importa flashcard e quiz</h2>
+      <p class="muted">Da un file Excel (.xlsx), CSV o JSON. Tutto quello che contiene viene aggiunto a <b>${esc(t?.title || '')}</b>.</p>
+      <ul class="import-formats">
+        <li><b>Flashcard</b>: due colonne, <code>Fronte</code> e <code>Retro</code> (vanno bene anche <code>Domanda</code> e <code>Risposta</code>).</li>
+        <li><b>Quiz</b>: <code>Domanda</code>, <code>Risposta A</code>, <code>Risposta B</code>… e <code>Corretta</code> (la lettera, il numero o il testo della risposta giusta). <code>Spiegazione</code> è facoltativa.</li>
+        <li>In un file Excel puoi mettere un foglio per le flashcard e uno per il quiz. Vanno bene anche le esportazioni di Quizlet e di Anki (testo separato da tabulazioni).</li>
+      </ul>
+      <div class="row gap wrap"><a class="btn sm" href="templates/modello-flashcard-quiz.xlsx" download>⤓ Modello Excel</a><a class="btn sm" href="templates/modello-flashcard-quiz.json" download>⤓ Modello JSON</a></div>
+      <p class="error" data-error hidden></p>
+      <div class="modal-foot"><div class="row gap push">
+        <button type="button" class="btn" data-action="close-modal">Annulla</button>
+        <label class="btn primary file-btn" data-import-pick>Scegli il file…<input type="file" accept="${IMPORT_ACCEPT}" data-change="import-file" data-topic="${topicId}" data-mode="${mode}" hidden></label>
+      </div></div>
+    </div>`, { wide: true, onClose: () => { pendingImport = null; } });
+}
+function renderImportPreview() {
+  const P = pendingImport; const panel = document.querySelector('#modal-root .panel');
+  if (!P || !panel) return;
+  const skipDups = P.skipDups;
+  const cards = skipDups ? P.split.cards : P.r.cards; const qs = skipDups ? P.split.questions : P.r.questions;
+  const total = cards.length + qs.length;
+  const letters = 'ABCDEFGH';
+  panel.innerHTML = `
+    <form data-form="import-go" class="import-preview">
+      <h2>Anteprima</h2>
+      <p class="muted">${esc(P.fileName)} · ${esc(P.r.format)} → ${esc(store.get(P.topicId)?.title || '')}</p>
+      <div class="import-sum"><div><b>${cards.length}</b><span>flashcard</span></div><div><b>${qs.length}</b><span>${qs.length === 1 ? 'domanda' : 'domande'} del quiz</span></div></div>
+      ${P.split.dups ? `<label class="check"><input type="checkbox" data-change="import-dups" ${skipDups ? 'checked' : ''}> Salta ${plural(P.split.dups, 'elemento già presente', 'elementi già presenti')} in questo argomento</label>` : ''}
+      ${cards.length ? `<div class="import-list"><h3>Flashcard</h3>${cards.slice(0, 4).map((c) => `<div class="import-item"><b>${esc(c.front)}</b><span class="muted">${esc(c.back)}</span></div>`).join('')}${cards.length > 4 ? `<p class="small muted">…e altre ${cards.length - 4}</p>` : ''}</div>` : ''}
+      ${qs.length ? `<div class="import-list"><h3>Quiz</h3>${qs.slice(0, 3).map((q) => `<div class="import-item"><b>${esc(q.question)}</b><span class="small">${q.options.map((o, j) => `<span class="${j === q.answer ? 'ok-text' : 'muted'}">${j === q.answer ? '✓ ' : ''}${letters[j] || j + 1}) ${esc(o)}</span>`).join(' · ')}</span></div>`).join('')}${qs.length > 3 ? `<p class="small muted">…e altre ${qs.length - 3}</p>` : ''}</div>` : ''}
+      ${P.r.skipped.length ? `<details class="import-skipped" ${total ? '' : 'open'}><summary>${plural(P.r.skipped.length, 'riga saltata', 'righe saltate')}</summary><ul>${P.r.skipped.slice(0, 30).map((s) => `<li><b>${esc(s.where)}</b>: ${esc(s.reason)}</li>`).join('')}${P.r.skipped.length > 30 ? `<li>…e altre ${P.r.skipped.length - 30}</li>` : ''}</ul></details>` : ''}
+      ${!total ? '<p class="error">Non c\'è niente da importare. Controlla le intestazioni delle colonne oppure parti dal modello.</p>' : ''}
+      <p class="error" data-error hidden></p>
+      <div class="modal-foot"><div class="row gap push">
+        <button type="button" class="btn" data-action="import-back" data-topic="${P.topicId}">Scegli un altro file</button>
+        <button class="btn primary" type="submit" ${total ? '' : 'disabled'}>Importa ${total ? plural(total, 'elemento', 'elementi') : ''}</button>
+      </div></div>
+    </form>`;
+}
+
+/* ---------- Quaderno → PDF ---------- */
+let exportUrl = null;
+function exportOpts(form) {
+  const fd = new FormData(form);
+  return { orient: fd.get('orient') || 'auto', scale: fd.get('scale') || 'fit', white: !!fd.get('white'), pattern: fd.get('pattern') !== null ? true : !form.querySelector('[name=pattern]') };
+}
+async function openBoardExport(topicId) {
+  await boardEditor?.saveNow();
+  const { plan } = await import('../boardexport.js');
+  if (!plan(topicId)) { toast('Il quaderno è vuoto: scrivi qualcosa prima di esportarlo.'); return; }
+  const t = store.get(topicId);
+  const dark = board.isDark(topicId);
+  const paper = t.board?.paper || 'grid';
+  const seg = (name, opts, def) => `<div class="seg" role="radiogroup">${opts.map(([v, l]) => `<label><input type="radio" name="${name}" value="${v}" data-change="board-export-opts" ${v === def ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div>`;
+  openModal(`
+    <form data-form="board-export-go" data-topic="${topicId}" class="export-form">
+      <h2>Esporta il quaderno in PDF</h2>
+      <p class="muted">Pagine A4 con i tratti in formato vettoriale: restano nitidi a qualsiasi ingrandimento e in stampa.</p>
+      <div class="field"><label>Orientamento</label>${seg('orient', [['auto', 'Automatico'], ['portrait', 'Verticale'], ['landscape', 'Orizzontale']], 'auto')}</div>
+      <div class="field"><label>Dimensione</label>${seg('scale', [['fit', 'Adatta alla pagina'], ['real', 'Dimensione reale']], 'fit')}
+        <span class="hint">"Adatta" rimpicciolisce gli appunti molto larghi per farli stare in una pagina; "Dimensione reale" li divide su più pagine affiancate.</span></div>
+      ${paper !== 'blank' ? `<label class="check"><input type="checkbox" name="pattern" value="1" checked data-change="board-export-opts"> Includi ${paper === 'grid' ? 'i quadretti' : paper === 'lined' ? 'le righe' : 'i puntini'}</label>` : ''}
+      ${dark ? '<label class="check"><input type="checkbox" name="white" value="1" data-change="board-export-opts"> Foglio bianco invece che nero (consigliato per stampare)</label>' : ''}
+      <p class="export-summary" data-export-summary></p>
+      <p class="error" data-error hidden></p>
+      <div class="modal-foot"><div class="row gap push"><button type="button" class="btn" data-action="close-modal">Annulla</button><button class="btn primary" type="submit">Crea PDF</button></div></div>
+    </form>`, { onClose: () => { if (exportUrl) { URL.revokeObjectURL(exportUrl); exportUrl = null; } } });
+  updateExportSummary();
+}
+async function updateExportSummary() {
+  const form = document.querySelector('form[data-form=board-export-go]');
+  if (!form) return;
+  const { plan } = await import('../boardexport.js');
+  const o = exportOpts(form);
+  const p = plan(form.dataset.topic, o);
+  const el = form.querySelector('[data-export-summary]');
+  if (!p || !el) return;
+  const one = p.regions.length === 1;
+  el.innerHTML = `<b>${plural(p.regions.length, 'pagina', 'pagine')}</b> A4 ${p.land ? (one ? 'orizzontale' : 'orizzontali') : (one ? 'verticale' : 'verticali')}${p.cols > 1 ? ` · ${p.cols} pagine affiancate per riga` : ''} · scala ${p.pct}%${p.pct < 50 ? ' <span class="warn">(appunti molto larghi: il testo sarà piccolo, prova "Dimensione reale")</span>' : ''}`;
+}
+async function runBoardExport(form) {
+  const topicId = form.dataset.topic;
+  const btn = form.querySelector('button[type=submit]');
+  const summary = form.querySelector('[data-export-summary]');
+  btn.disabled = true; btn.textContent = 'Creo il PDF…';
+  try {
+    const { exportBoardPdf, fileName } = await import('../boardexport.js');
+    const { blob, pages } = await exportBoardPdf(topicId, exportOpts(form), (msg) => { if (summary) summary.textContent = msg; });
+    if (!isModalOpen()) return;
+    const name = fileName(store.get(topicId)?.title);
+    if (exportUrl) URL.revokeObjectURL(exportUrl);
+    exportUrl = URL.createObjectURL(blob);
+    const file = new File([blob], name, { type: 'application/pdf' });
+    const canShare = !!navigator.canShare?.({ files: [file] });
+    const panel = document.querySelector('#modal-root .panel');
+    panel.innerHTML = `
+      <h2>PDF pronto</h2>
+      <p class="muted">${plural(pages, 'pagina', 'pagine')} · ${blob.size > 1048576 ? (blob.size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(blob.size / 1024)) + ' KB'}</p>
+      <div class="export-actions">
+        <a class="btn primary" href="${exportUrl}" download="${esc(name)}">⤓ Scarica</a>
+        ${canShare ? '<button class="btn" data-action="board-export-share">Condividi…</button>' : ''}
+        <a class="btn" href="${exportUrl}" target="_blank" rel="noopener">Apri</a>
+      </div>
+      <p class="hint">Scaricato, lo trovi nella cartella Download del dispositivo.${canShare ? ' Con "Condividi" puoi mandarlo a Drive, e-mail o WhatsApp.' : ''}</p>
+      <div class="modal-foot"><div class="row gap push"><button class="btn" data-action="close-modal">Chiudi</button></div></div>`;
+    exportShare = file;
+  } catch (e) {
+    console.error(e);
+    modalError(e.message || 'Esportazione non riuscita');
+    btn.disabled = false; btn.textContent = 'Riprova';
+  }
+}
+let exportShare = null;
+
 async function transcribeBoard(el) {
   if (!ai.hasKey()) { needKeyModal(); return; }
   const topicId = el.dataset.topic;
@@ -573,6 +695,48 @@ async function transcribePhotos(el, photos) {
 
 registerActions({
   'board-transcribe': (el) => transcribeBoard(el),
+  'board-export': (el) => openBoardExport(el.dataset.topic),
+  'import-open': (el) => importHelp(el.dataset.topic, el.dataset.mode),
+  'import-back': (el) => importHelp(el.dataset.topic),
+  'import-file': async (input) => {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    const topicId = input.dataset.topic;
+    const pick = document.querySelector('[data-import-pick]');
+    if (pick) pick.firstChild.textContent = 'Leggo il file…';
+    modalError('');
+    try {
+      const { parseFile, splitDuplicates } = await import('../importer.js');
+      const r = await parseFile(file);
+      if (!isModalOpen()) return;
+      pendingImport = { topicId, fileName: file.name, r, split: splitDuplicates(r, cardsOf(topicId), questionsOf(topicId)), skipDups: true, mode: input.dataset.mode };
+      renderImportPreview();
+    } catch (e) {
+      console.warn('import', e);
+      modalError(e.message || 'Non riesco a leggere questo file.');
+      if (pick) pick.firstChild.textContent = 'Scegli il file…';
+    }
+  },
+  'import-dups': (el) => { if (pendingImport) { pendingImport.skipDups = el.checked; renderImportPreview(); } },
+  'import-go': async () => {
+    const P = pendingImport; if (!P) return;
+    const topicId = P.topicId; const areaId = store.get(topicId)?.areaId;
+    const cards = P.skipDups ? P.split.cards : P.r.cards; const qs = P.skipDups ? P.split.questions : P.r.questions;
+    if (cards.length) await store.putMany('card', cards.map((c) => ({ ...c, topicId, areaId, srs: newCardSrs(), created: today(), source: 'import' })));
+    if (qs.length) await store.putMany('question', qs.map((q) => ({ ...q, topicId, areaId, created: today(), source: 'import' })));
+    pendingImport = null;
+    closeModal();
+    toast(`Importate: ${plural(cards.length, 'flashcard', 'flashcard')} e ${plural(qs.length, 'domanda', 'domande')}`);
+    navigate(`#/topic/${topicId}?tab=${cards.length && (P.mode !== 'quiz' || !qs.length) ? 'cards' : 'quiz'}`);
+  },
+  'board-export-opts': () => updateExportSummary(),
+  'board-export-go': (form) => runBoardExport(form),
+  'board-export-share': async () => {
+    if (!exportShare) return;
+    try { await navigator.share({ files: [exportShare], title: exportShare.name }); }
+    catch (e) { if (e.name !== 'AbortError') toast('Condivisione non riuscita', 'bad'); }
+  },
   'note-new': async (el) => {
     const isInk = el.dataset.type === 'ink';
     const n = await store.put('note', { topicId: el.dataset.topic, title: '', body: '', created: today(), ...(isInk ? { type: 'ink', ink: inkMod.emptyInk() } : {}) });
