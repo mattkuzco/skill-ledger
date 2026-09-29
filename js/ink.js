@@ -78,22 +78,44 @@ export function drawStroke(g, st, scale, dark = false) {
     g.restore();
     return;
   }
-  const width = (i) => Math.max(0.6, st.w * (0.35 + 0.95 * (p[i * 3 + 2] / 100)) * scale);
-  if (n === 1) { g.beginPath(); g.arc(p[0] * scale, p[1] * scale, width(0) / 2, 0, Math.PI * 2); g.fill(); g.restore(); return; }
-  // Quadratic smoothing through midpoints, width per segment from pressure.
-  let px = p[0] * scale; let py = p[1] * scale;
-  for (let i = 1; i < n; i++) {
-    const x0 = p[(i - 1) * 3] * scale; const y0 = p[(i - 1) * 3 + 1] * scale;
-    const x1 = p[i * 3] * scale; const y1 = p[i * 3 + 1] * scale;
-    const mx = (x0 + x1) / 2; const my = (y0 + y1) / 2;
-    g.lineWidth = (width(i - 1) + width(i)) / 2;
-    g.beginPath();
-    g.moveTo(px, py);
-    g.quadraticCurveTo(x0, y0, i === n - 1 ? x1 : mx, i === n - 1 ? y1 : my);
-    g.stroke();
-    px = i === n - 1 ? x1 : mx; py = i === n - 1 ? y1 : my;
-  }
+  if (n === 1) { g.beginPath(); g.arc(p[0] * scale, p[1] * scale, penWidth(st, 0, scale) / 2, 0, Math.PI * 2); g.fill(); g.restore(); return; }
+  for (let i = 1; i < n; i++) penSegment(g, st, i, scale);
+  penTail(g, st, scale);
   g.restore();
+}
+
+/* Pen strokes are drawn piece by piece so the editor can paint a stroke while it is being
+   written (each new point adds one piece) and get exactly the same result as a full redraw.
+   Piece i (1 ≤ i < n) runs from the previous anchor to the midpoint of points i-1 and i,
+   bending through point i-1; the anchors are point 0 and then the midpoints. The tail joins
+   the last midpoint to the last point. Width follows pen pressure. */
+export const penWidth = (st, i, scale) => Math.max(0.6, st.w * (0.35 + 0.95 * (st.p[i * 3 + 2] / 100)) * scale);
+export function penSegment(g, st, i, scale) {
+  const p = st.p;
+  const x0 = p[(i - 1) * 3] * scale; const y0 = p[(i - 1) * 3 + 1] * scale;
+  const x1 = p[i * 3] * scale; const y1 = p[i * 3 + 1] * scale;
+  g.lineWidth = (penWidth(st, i - 1, scale) + penWidth(st, i, scale)) / 2;
+  g.beginPath();
+  if (i === 1) { g.moveTo(x0, y0); g.lineTo((x0 + x1) / 2, (y0 + y1) / 2); }
+  else {
+    g.moveTo((p[(i - 2) * 3] * scale + x0) / 2, (p[(i - 2) * 3 + 1] * scale + y0) / 2);
+    g.quadraticCurveTo(x0, y0, (x0 + x1) / 2, (y0 + y1) / 2);
+  }
+  g.stroke();
+}
+export function penTail(g, st, scale) {
+  const p = st.p; const n = p.length / 3;
+  if (n < 2) return;
+  const x0 = p[(n - 2) * 3] * scale; const y0 = p[(n - 2) * 3 + 1] * scale;
+  const x1 = p[(n - 1) * 3] * scale; const y1 = p[(n - 1) * 3 + 1] * scale;
+  g.lineWidth = penWidth(st, n - 1, scale);
+  g.beginPath(); g.moveTo((x0 + x1) / 2, (y0 + y1) / 2); g.lineTo(x1, y1); g.stroke();
+}
+// Style for painting pen pieces directly (used by the live editor).
+export function penStyle(g, st, dark) {
+  const c = shownColor(st.c, dark);
+  g.lineCap = 'round'; g.lineJoin = 'round'; g.strokeStyle = c; g.fillStyle = c;
+  g.globalAlpha = 1; g.globalCompositeOperation = 'source-over';
 }
 
 // opts.light forces white paper (used for the AI, which reads dark ink on white best).

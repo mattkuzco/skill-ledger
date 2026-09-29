@@ -9,7 +9,7 @@
 // dark = black paper; strokes keep their colour and are shown in a light version (see ink.js).
 
 import * as store from './store.js';
-import { drawStroke, PEN_COLORS, HL_COLORS, SIZES, paperColor, shownColor, lineColor } from './ink.js';
+import { drawStroke, penSegment, penTail, penStyle, penWidth, PEN_COLORS, HL_COLORS, SIZES, paperColor, shownColor, lineColor } from './ink.js';
 import * as att from './attachments.js';
 import { today, toast, debounce } from './util.js';
 
@@ -165,8 +165,19 @@ export function mountBoard(root, topic, { onAction } = {}) {
   const over = root.querySelector('[data-board-over]');
   const bar = root.querySelector('[data-board-bar]');
   const zoomLabel = () => root.querySelector('[data-board-zoom]');
-  const g = base.getContext('2d');
+  // Low-latency ink: a "desynchronized" canvas is shown on screen as soon as it is drawn,
+  // without waiting for the browser's next frame (Chrome on Android and ChromeOS). The pen
+  // stroke is painted straight onto it, one piece per pen event, like OneNote does.
+  const wantDirect = store.getMeta('inkLowLatency', true) !== false;
+  let g = null;
+  if (wantDirect) { try { g = base.getContext('2d', { desynchronized: true, alpha: false }); } catch { g = null; } }
+  if (!g) g = base.getContext('2d', { alpha: false });
+  const direct = wantDirect && !!g.getContextAttributes?.().desynchronized;
+  root.dataset.lowLatency = direct ? '1' : '0';
   const og = over.getContext('2d');
+  // Nothing sits above the ink layer unless needed (lets the browser put it on a fast path).
+  let overShown = true;
+  const showOver = (on) => { if (on !== overShown) { overShown = on; over.style.visibility = on ? '' : 'hidden'; } };
 
   // Local working copy of the tiles, keyed by record id (or a temporary key until first save).
   // Two devices may create a tile for the same square; both are kept and both are drawn.
@@ -205,6 +216,7 @@ export function mountBoard(root, topic, { onAction } = {}) {
     dpr = Math.min(window.devicePixelRatio || 1, 2.5);
     W = Math.round(r.width * dpr); H = Math.round(r.height * dpr);
     for (const c of [base, over]) { c.width = W; c.height = H; }
+    rect = null;
     if (!saved && !resize.done) fitDefault(r.width);
     resize.done = true;
     redraw();
@@ -227,20 +239,29 @@ export function mountBoard(root, topic, { onAction } = {}) {
     g.fillStyle = paperColor(dark); g.fillRect(0, 0, W, H);
     drawPattern(g, paper, view, W, H, dpr, { dark });
     drawWorld(g, topicId, allTiles(), images, view, W, H, dpr, { dark, onBitmap: () => requestAnimationFrame(redraw) });
+    if (active?.kind === 'draw' && active.st.t === 'p') { worldOn(g); drawStroke(g, active.st, 1, dark); g.setTransform(1, 0, 0, 1, 0, 0); }
     drawOverlay();
     const zl = zoomLabel(); if (zl) zl.textContent = `${Math.round(view.z * 100)}%`;
   }
+  const worldOn = (ctx) => ctx.setTransform(view.z * dpr, 0, 0, view.z * dpr, -view.x * view.z * dpr, -view.y * view.z * dpr);
+  // The overlay holds what isn't final yet: the live highlighter stroke, the predicted tip of the
+  // pen (only without low-latency mode, where the pen itself is already on the ink layer) and
+  // the photo selection box.
   function drawOverlay() {
     og.setTransform(1, 0, 0, 1, 0, 0);
     og.clearRect(0, 0, W, H);
+    let any = false;
     if (active?.kind === 'draw') {
-      og.setTransform(view.z * dpr, 0, 0, view.z * dpr, -view.x * view.z * dpr, -view.y * view.z * dpr);
       const st = active.st;
+      const n = st.p.length / 3;
       const lastP = st.p[st.p.length - 1];
-      drawStroke(og, active.pred?.length ? { ...st, p: st.p.concat(active.pred.flatMap(([x, y]) => [x, y, lastP])) } : st, 1, dark);
+      const pred = active.pred?.length ? active.pred.flatMap(([x, y]) => [x, y, lastP]) : [];
+      if (st.t === 'h') { worldOn(og); drawStroke(og, pred.length ? { ...st, p: st.p.concat(pred) } : st, 1, dark); any = true; }
+      else if (!direct && n >= 2) { worldOn(og); drawStroke(og, { ...st, p: st.p.slice(-6).concat(pred) }, 1, dark); any = true; }
       og.setTransform(1, 0, 0, 1, 0, 0);
     }
     const sel = images.find((a) => a.id === selected);
+    if (sel) any = true;
     if (sel) {
       const [sx, sy] = toScreen(sel.x, sel.y);
       const sw = sel.bw * view.z * dpr; const sh = sel.bh * view.z * dpr;
@@ -252,10 +273,21 @@ export function mountBoard(root, topic, { onAction } = {}) {
       const hs = 14 * dpr;
       og.fillRect(sx + sw - hs / 2, sy + sh - hs / 2, hs, hs);
     }
+    showOver(any);
+  }
+  // Paint pen pieces [from, to) of the live stroke onto the ink layer, plus the tail at the end.
+  function paintPen(st, from, to, tail) {
+    g.save(); worldOn(g); penStyle(g, st, dark);
+    if (st.p.length === 3 && tail) { g.beginPath(); g.arc(st.p[0], st.p[1], penWidth(st, 0, 1) / 2, 0, Math.PI * 2); g.fill(); } // a dot
+    for (let i = Math.max(1, from); i < to; i++) penSegment(g, st, i, 1);
+    if (tail) penTail(g, st, 1);
+    g.restore();
   }
   const toScreen = (x, y) => [(x - view.x) * view.z * dpr, (y - view.y) * view.z * dpr];
+  let rect = null; // cached: reading layout on every pen event costs time
+  const getRect = () => rect || (rect = base.getBoundingClientRect());
   function toWorld(ev) {
-    const r = over.getBoundingClientRect();
+    const r = getRect();
     return [view.x + (ev.clientX - r.left) / view.z, view.y + (ev.clientY - r.top) / view.z];
   }
 
@@ -285,8 +317,17 @@ export function mountBoard(root, topic, { onAction } = {}) {
   }
 
   /* --- saving --- */
-  const saveTiles = debounce(async () => { await saveTilesNow(); setSaved(true); }, 600);
-  function setSaved(ok) { const s = root.querySelector('[data-board-saved]'); if (s) s.textContent = ok ? 'Salvato' : 'Salvataggio…'; }
+  // Saved once you pause, so writing is never interrupted by the database.
+  const saveTiles = debounce(async () => {
+    if (active?.kind === 'draw' || active?.kind === 'erase') { saveTiles(); return; }
+    await saveTilesNow(); setSaved(true);
+  }, 1200);
+  let savedState = true;
+  function setSaved(ok) { if (ok === savedState) return; savedState = ok; const s = root.querySelector('[data-board-saved]'); if (s) s.textContent = ok ? 'Salvato' : 'Salvataggio…'; }
+  function updateHistory() {
+    const u = bar.querySelector('[data-b=undo]'); const r = bar.querySelector('[data-b=redo]');
+    if (u) u.disabled = !undo.length; if (r) r.disabled = !redo.length;
+  }
   function touch(key) { dirty.add(key); setSaved(false); saveTiles(); }
   function tileFor(st) {
     const tx = Math.floor(st.p[0] / TILE); const ty = Math.floor(st.p[1] / TILE);
@@ -333,14 +374,16 @@ export function mountBoard(root, topic, { onAction } = {}) {
   /* --- pointers --- */
   const pointers = new Map(); // id -> {x, y, type}
   let active = null;          // draw | erase | pan | pinch | move | resize
-  const capture = (id) => { try { over.setPointerCapture(id); } catch { /* synthetic */ } };
+  const capture = (id) => { try { stage.setPointerCapture(id); } catch { /* synthetic */ } };
   const pressureOf = (e) => (e.pointerType === 'pen' && e.pressure > 0 ? Math.round(Math.min(1, e.pressure) * 100) : 55);
-  const cssPos = (e) => { const r = over.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  const cssPos = (e) => { const r = getRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  const q = (v) => Math.round(v * 10) / 10; // points keep a tenth of a unit: smooth even when zoomed in
+  let lastPenUp = 0;
 
   const touchPts = () => [...pointers.values()].filter((p) => p.type === 'touch');
   function startPinch() {
     const [a, b] = touchPts();
-    if (active?.kind === 'draw') { active = null; drawOverlay(); } // a second finger cancels a finger stroke
+    if (active?.kind === 'draw') { active = null; redraw(); } // a second finger cancels a finger stroke
     beginGesture();
     active = { kind: 'pinch', ptype: 'touch', d0: Math.hypot(a.x - b.x, a.y - b.y), z0: view.z, mid0: [(a.x + b.x) / 2, (a.y + b.y) / 2], v0: { ...view } };
   }
@@ -354,7 +397,8 @@ export function mountBoard(root, topic, { onAction } = {}) {
     return Math.abs(x - (a.x + a.bw)) < h && Math.abs(y - (a.y + a.bh)) < h ? a : null;
   }
 
-  over.addEventListener('pointerdown', (ev) => {
+  stage.addEventListener('pointerdown', (ev) => {
+    rect = null;
     const [cx, cy] = cssPos(ev);
     pointers.set(ev.pointerId, { x: cx, y: cy, type: ev.pointerType });
     if (ev.pointerType === 'pen' && fingerMode === null) { fingerMode = 'scroll'; store.setMeta('inkFinger', 'scroll'); renderBar(); }
@@ -380,13 +424,52 @@ export function mountBoard(root, topic, { onAction } = {}) {
     const erasing = tool.mode === 'erase' || (ev.pointerType === 'pen' && (ev.buttons & 34));
     if (erasing) { active = { kind: 'erase', ptype: ev.pointerType, id: ev.pointerId, removed: [], last: [x, y] }; eraseAt(x, y, active.removed); return; }
     const st = tool.t === 'h'
-      ? { t: 'h', c: tool.hc, w: SIZES.h[tool.size], p: [Math.round(x), Math.round(y), 50] }
-      : { t: 'p', c: tool.c, w: SIZES.p[tool.size], p: [Math.round(x), Math.round(y), pressureOf(ev)] };
-    active = { kind: 'draw', ptype: ev.pointerType, id: ev.pointerId, st, pred: [], raf: 0 };
-    drawOverlay();
+      ? { t: 'h', c: tool.hc, w: SIZES.h[tool.size], p: [q(x), q(y), 50] }
+      : { t: 'p', c: tool.c, w: SIZES.p[tool.size], p: [q(x), q(y), pressureOf(ev)] };
+    active = { kind: 'draw', ptype: ev.pointerType, id: ev.pointerId, st, pred: [], raf: 0, raw: false };
+    if (st.t === 'h') drawOverlay();
   });
 
-  over.addEventListener('pointermove', (ev) => {
+  // New points for the stroke (or eraser) in progress. Called for every pen event.
+  function addPoints(ev) {
+    const evs = ev.getCoalescedEvents ? ev.getCoalescedEvents() : [];
+    const st = active.st;
+    const n0 = st ? st.p.length / 3 : 0;
+    for (const e of evs.length ? evs : [ev]) {
+      const [wx, wy] = toWorld(e);
+      if (active.kind === 'erase') {
+        const [lx, ly] = active.last;
+        const steps = Math.max(1, Math.ceil(Math.hypot(wx - lx, wy - ly) / (6 / view.z)));
+        for (let k = 1; k <= steps; k++) eraseAt(lx + ((wx - lx) * k) / steps, ly + ((wy - ly) * k) / steps, active.removed);
+        active.last = [wx, wy];
+        continue;
+      }
+      const pts = st.p;
+      const rx = q(wx); const ry = q(wy);
+      if (Math.abs(rx - pts[pts.length - 3]) + Math.abs(ry - pts[pts.length - 2]) < 1.2 / view.z) continue; // under ~1 screen px
+      let pr = 50;
+      if (st.t === 'p') {
+        pr = pressureOf(e);
+        if (active.ptype === 'pen') pr = Math.round(pts[pts.length - 1] + (pr - pts[pts.length - 1]) * 0.5); // smooth pressure changes
+      }
+      pts.push(rx, ry, pr);
+    }
+    if (active.kind !== 'draw') return;
+    const n1 = st.p.length / 3;
+    if (st.t === 'p' && n1 > n0) paintPen(st, n0, n1, false); // straight onto the ink layer: no waiting for the next frame
+    if ((st.t === 'h' || !direct) && !active.raf) active.raf = requestAnimationFrame(() => { if (active?.kind === 'draw') { active.raf = 0; drawOverlay(); } });
+  }
+
+  // pointerrawupdate delivers pen positions as soon as they arrive, instead of once per frame.
+  if ('onpointerrawupdate' in window) {
+    stage.addEventListener('pointerrawupdate', (ev) => {
+      if (!active || ev.pointerId !== active.id || (active.kind !== 'draw' && active.kind !== 'erase')) return;
+      active.raw = true;
+      addPoints(ev);
+    });
+  }
+
+  stage.addEventListener('pointermove', (ev) => {
     const p = pointers.get(ev.pointerId);
     if (p) { const [cx, cy] = cssPos(ev); p.x = cx; p.y = cy; }
     if (!active) return;
@@ -412,23 +495,9 @@ export function mountBoard(root, topic, { onAction } = {}) {
     const [x, y] = toWorld(ev);
     if (active.kind === 'move') { active.img.x = x - active.dx; active.img.y = y - active.dy; redraw(); return; }
     if (active.kind === 'resize') { const img = active.img; img.bw = Math.max(40, x - img.x); img.bh = img.bw * active.ratio; redraw(); return; }
-    const evs = ev.getCoalescedEvents ? ev.getCoalescedEvents() : [];
-    for (const e of evs.length ? evs : [ev]) {
-      const [wx, wy] = toWorld(e);
-      if (active.kind === 'erase') {
-        const [lx, ly] = active.last;
-        const steps = Math.max(1, Math.ceil(Math.hypot(wx - lx, wy - ly) / (6 / view.z)));
-        for (let k = 1; k <= steps; k++) eraseAt(lx + ((wx - lx) * k) / steps, ly + ((wy - ly) * k) / steps, active.removed);
-        active.last = [wx, wy];
-        continue;
-      }
-      const pts = active.st.p;
-      const rx = Math.round(wx); const ry = Math.round(wy);
-      if (Math.abs(rx - pts[pts.length - 3]) + Math.abs(ry - pts[pts.length - 2]) < Math.max(1, 1.5 / view.z)) continue;
-      pts.push(rx, ry, active.st.t === 'h' ? 50 : pressureOf(e));
-    }
-    if (active.kind === 'draw') {
-      active.pred = (ev.getPredictedEvents ? ev.getPredictedEvents().slice(0, 3) : []).map((e) => toWorld(e).map(Math.round));
+    if (!active.raw) addPoints(ev);
+    if (active.kind === 'draw' && (active.st.t === 'h' || !direct)) {
+      active.pred = (ev.getPredictedEvents ? ev.getPredictedEvents().slice(0, 3) : []).map((e) => toWorld(e).map(q));
       if (!active.raf) active.raf = requestAnimationFrame(() => { if (active?.kind === 'draw') { active.raf = 0; drawOverlay(); } });
     }
   });
@@ -447,24 +516,25 @@ export function mountBoard(root, topic, { onAction } = {}) {
       cancelAnimationFrame(a.raf);
       const key = tileFor(a.st);
       tiles.get(key).s.push(a.st);
-      g.setTransform(view.z * dpr, 0, 0, view.z * dpr, -view.x * view.z * dpr, -view.y * view.z * dpr);
-      drawStroke(g, a.st, 1, dark);
-      g.setTransform(1, 0, 0, 1, 0, 0);
+      if (a.st.t === 'p') paintPen(a.st, a.st.p.length / 3, a.st.p.length / 3, true); // only the last bit is missing
+      else { worldOn(g); drawStroke(g, a.st, 1, dark); g.setTransform(1, 0, 0, 1, 0, 0); }
       drawOverlay();
-      undo.push({ op: 'add', key, st: a.st }); redo.length = 0; touch(key); renderBar();
+      lastPenUp = Date.now();
+      undo.push({ op: 'add', key, st: a.st }); redo.length = 0; touch(key); updateHistory();
     } else if (a.kind === 'erase' && a.removed.length) {
-      undo.push({ op: 'erase', items: a.removed }); redo.length = 0; renderBar();
+      lastPenUp = Date.now();
+      undo.push({ op: 'erase', items: a.removed }); redo.length = 0; updateHistory();
     } else if (a.kind === 'move' || a.kind === 'resize') {
       const img = a.img;
       const cur = store.get(img.id);
       if (cur) store.put('attachment', { ...cur, x: Math.round(img.x), y: Math.round(img.y), bw: Math.round(img.bw), bh: Math.round(img.bh) });
     }
   }
-  over.addEventListener('pointerup', endPointer);
-  over.addEventListener('pointercancel', endPointer);
-  over.addEventListener('contextmenu', (e) => e.preventDefault());
+  stage.addEventListener('pointerup', endPointer);
+  stage.addEventListener('pointercancel', endPointer);
+  stage.addEventListener('contextmenu', (e) => e.preventDefault());
 
-  over.addEventListener('wheel', (ev) => {
+  stage.addEventListener('wheel', (ev) => {
     ev.preventDefault();
     beginGesture();
     const [cx, cy] = cssPos(ev);
@@ -477,8 +547,8 @@ export function mountBoard(root, topic, { onAction } = {}) {
   let spaceDown = false;
   const onKey = (ev) => {
     if (ev.target.matches('input, textarea, select')) return;
-    if (ev.type === 'keydown' && ev.code === 'Space') { spaceDown = true; over.style.cursor = 'grab'; ev.preventDefault(); }
-    if (ev.type === 'keyup' && ev.code === 'Space') { spaceDown = false; over.style.cursor = ''; }
+    if (ev.type === 'keydown' && ev.code === 'Space') { spaceDown = true; stage.style.cursor = 'grab'; ev.preventDefault(); }
+    if (ev.type === 'keyup' && ev.code === 'Space') { spaceDown = false; stage.style.cursor = ''; }
     if (ev.type !== 'keydown') return;
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'z') { ev.preventDefault(); ev.shiftKey ? doRedo() : doUndo(); }
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'y') { ev.preventDefault(); doRedo(); }
@@ -573,7 +643,7 @@ export function mountBoard(root, topic, { onAction } = {}) {
     if (k === 'fit') { const bx = contentBoundsLocal(); if (bx) fitTo(bx); else { view.z = 1; view.x = -40; view.y = -40; } redraw(); saveView(); }
     if (k === 'finger') { fingerMode = fingerMode === 'scroll' ? 'draw' : 'scroll'; store.setMeta('inkFinger', fingerMode); }
     if (tool.mode !== 'select' && selected) { selected = null; drawOverlay(); }
-    over.dataset.mode = tool.mode;
+    stage.dataset.mode = tool.mode;
     renderBar();
   });
   bar.addEventListener('change', (ev) => {
@@ -594,24 +664,37 @@ export function mountBoard(root, topic, { onAction } = {}) {
   }
 
   /* --- remote changes (another device drew on this board) --- */
+  const signature = () => tilesOf(topicId).map((t) => t.id + t.updated_at).join() + '|' + boardImagesOf(topicId).map((a) => a.id + a.updated_at).join();
+  let lastSig = signature();
+  let remoteTimer = 0;
+  function applyRemote() {
+    clearTimeout(remoteTimer);
+    // redrawing a big board takes a moment: wait until the pen has been still for a bit
+    if (active || Date.now() - lastPenUp < 1500) { remoteTimer = setTimeout(applyRemote, 700); return; }
+    loadTiles();
+    images = boardImagesOf(topicId).map((a) => ({ ...a }));
+    redraw();
+  }
   const unsub = store.subscribe((src) => {
     if (src !== 'remote') return;
     const tb = store.get(topicId)?.board || {};
-    if ((tb.paper || 'grid') !== paper || !!tb.dark !== dark) { paper = tb.paper || 'grid'; dark = !!tb.dark; applyBg(); renderBar(); }
-    loadTiles();
-    images = boardImagesOf(topicId).map((a) => (active?.img?.id === a.id ? active.img : { ...a }));
-    if (!active) redraw();
+    const look = (tb.paper || 'grid') !== paper || !!tb.dark !== dark;
+    if (look) { paper = tb.paper || 'grid'; dark = !!tb.dark; applyBg(); renderBar(); }
+    const sig = signature();
+    if (sig === lastSig && !look) return;
+    lastSig = sig;
+    applyRemote();
   });
 
   const ro = new ResizeObserver(() => resize());
   ro.observe(stage);
   renderBar();
-  over.dataset.mode = tool.mode;
+  stage.dataset.mode = tool.mode;
   resize();
 
   return {
     saveNow: () => saveTilesNow(),
-    destroy() { ro.disconnect(); unsub(); document.removeEventListener('keydown', onKey); document.removeEventListener('keyup', onKey); },
+    destroy() { ro.disconnect(); unsub(); clearTimeout(remoteTimer); document.removeEventListener('keydown', onKey); document.removeEventListener('keyup', onKey); },
   };
 
   async function saveTilesNow() {

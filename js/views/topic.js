@@ -463,7 +463,7 @@ export function mountBoardView(topicId) {
   boardEditor?.destroy();
   boardEditor = board.mountBoard(root, t);
   const hint = root.querySelector('[data-board-hint]');
-  if (hint) root.querySelector('[data-board-over]').addEventListener('pointerdown', () => hint.remove(), { once: true });
+  if (hint) root.querySelector('[data-board-stage]').addEventListener('pointerdown', () => hint.remove(), { once: true });
 }
 
 export async function leaveBoard() {

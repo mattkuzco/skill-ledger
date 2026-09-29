@@ -87,12 +87,18 @@ export function render() {
   </section>
 
   <section class="settings-block">
+    <div class="sec-head"><h2>Scrittura a mano</h2></div>
+    <label class="check"><input type="checkbox" data-change="ink-lowlat" ${store.getMeta('inkLowLatency', true) !== false ? 'checked' : ''}> Inchiostro a bassa latenza</label>
+    <p class="hint">Disegna il tratto sullo schermo appena la penna si muove, senza aspettare il fotogramma successivo (come OneNote). Se nel Quaderno vedi sfarfallii o strisce, disattivalo. Vale per questo dispositivo.</p>
+  </section>
+
+  <section class="settings-block">
     <div class="sec-head"><h2>Aspetto e app</h2></div>
     <div class="row gap wrap">
       <div class="seg" role="radiogroup" aria-label="Tema">${[['system', 'Sistema'], ['light', 'Chiaro'], ['dark', 'Scuro']].map(([k, l]) => `<label><input type="radio" name="theme" value="${k}" data-change="theme" ${k === theme ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div>
       ${standalone ? '<span class="sync-pill ok"><i></i>App installata</span>' : installEvent ? '<button class="btn primary" data-action="install">Installa app</button>' : ''}
     </div>
-    <p class="hint mono">Versione ${APP_VERSION} · FSRS, quaderno, allegati e link</p>
+    <p class="hint mono">Versione ${APP_VERSION} · FSRS, quaderno, allegati e link, inchiostro a bassa latenza</p>
     ${standalone ? '' : `<p class="hint">Per installarla: su Chrome/Edge usa il pulsante "Installa" nella barra degli indirizzi; su iPhone apri in Safari → Condividi → "Aggiungi alla schermata Home"; su Android menu ⋮ → "Installa app".</p>`}
   </section>`;
 }
@@ -156,6 +162,7 @@ registerActions({
   'load-sample-settings': async () => { await loadSample(); toast('Esempi caricati'); },
   wipe: async () => { await store.wipe(); await store.setMeta('cursor', null); toast('Dati cancellati da questo dispositivo'); },
   retention: async (el) => { await store.setMeta('retention', +el.value); toast(`Memoria desiderata: ${Math.round(el.value * 100)}%. Vale dai prossimi ripassi.`); },
+  'ink-lowlat': async (el) => { await store.setMeta('inkLowLatency', el.checked); toast(el.checked ? 'Inchiostro a bassa latenza attivo' : 'Inchiostro a bassa latenza disattivato'); },
   theme: async (el) => { await store.setMeta('theme', el.value); applyTheme(); },
   install: async () => { if (!installEvent) return; installEvent.prompt(); await installEvent.userChoice; installEvent = null; rerender(); },
 });

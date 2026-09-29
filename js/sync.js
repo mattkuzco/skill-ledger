@@ -242,6 +242,8 @@ export async function syncNow() {
 let timer;
 export function scheduleSync(ms = 3000) {
   if (!isSignedIn()) return;
+  // While the Quaderno is open, sync less eagerly so uploads never compete with the pen.
+  if (document.body.classList.contains('board-mode')) ms = Math.max(ms, 10000);
   clearTimeout(timer);
   timer = setTimeout(syncNow, ms);
 }
