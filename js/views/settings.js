@@ -84,7 +84,7 @@ export function render() {
       <div class="seg" role="radiogroup" aria-label="Tema">${[['system', 'Sistema'], ['light', 'Chiaro'], ['dark', 'Scuro']].map(([k, l]) => `<label><input type="radio" name="theme" value="${k}" data-change="theme" ${k === theme ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div>
       ${standalone ? '<span class="sync-pill ok"><i></i>App installata</span>' : installEvent ? '<button class="btn primary" data-action="install">Installa app</button>' : ''}
     </div>
-    <p class="hint mono">Versione ${APP_VERSION} · quaderno infinito, foto e PDF</p>
+    <p class="hint mono">Versione ${APP_VERSION} · quaderno, allegati audio e video</p>
     ${standalone ? '' : `<p class="hint">Per installarla: su Chrome/Edge usa il pulsante "Installa" nella barra degli indirizzi; su iPhone apri in Safari → Condividi → "Aggiungi alla schermata Home"; su Android menu ⋮ → "Installa app".</p>`}
   </section>`;
 }

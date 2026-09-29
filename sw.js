@@ -2,7 +2,7 @@
 // everything else (Supabase, Anthropic API) goes straight to the network.
 // Bump VERSION whenever you change a file so installed apps pick up the update.
 
-const VERSION = 'v6';
+const VERSION = 'v7';
 const SHELL = `skill-ledger-shell-${VERSION}`;
 const FONTS = 'skill-ledger-fonts';
 

@@ -60,7 +60,8 @@ function safeRender(source) {
   if (r.editor) return; // the note editor owns its own state; never re-render under the pen
   const ae = document.activeElement;
   const typing = ae && $('#main').contains(ae) && ae.matches('input, textarea, select');
-  if (isModalOpen() || typing) { pending = true; return; }
+  const playing = [...$('#main').querySelectorAll('audio, video')].some((m) => !m.paused);
+  if (isModalOpen() || typing || playing) { pending = true; return; }
   render();
 }
 
@@ -104,6 +105,7 @@ function bindEvents() {
   });
   document.addEventListener('rerender', () => render());
   document.addEventListener('modal-closed', () => { if (pending) render(); });
+  document.addEventListener('ended', () => { if (pending && !isModalOpen()) render(); }, true);
   document.addEventListener('focusout', () => setTimeout(() => {
     const ae = document.activeElement;
     if (pending && !isModalOpen() && !(ae && ae.matches('input, textarea, select'))) render();

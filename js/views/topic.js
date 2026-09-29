@@ -13,7 +13,7 @@ import * as att from '../attachments.js';
 import * as inkMod from '../ink.js';
 import * as board from '../board.js';
 
-const TABS = [['notes', 'Note'], ['cards', 'Flashcard'], ['quiz', 'Quiz']];
+const TABS = [['notes', 'Note'], ['files', 'Allegati'], ['cards', 'Flashcard'], ['quiz', 'Quiz']];
 
 /* ---------- topic page ---------- */
 export function renderTopic(id, params) {
@@ -27,7 +27,7 @@ export function renderTopic(id, params) {
   const due = cards.filter(isCardDue).length;
   const resIsUrl = /^https?:\/\//.test(t.resource || '');
 
-  const counts = { notes: notes.length, cards: cards.length, quiz: qs.length };
+  const counts = { notes: notes.length, files: att.topicAttachments(id).length, cards: cards.length, quiz: qs.length };
   return `
   <nav class="crumbs"><a href="#/areas">Aree</a><span>/</span>${a ? `<a href="#/area/${a.id}">${esc(a.name)}</a><span>/</span>` : ''}<span>${esc(t.title)}</span></nav>
   <header class="topic-head">
@@ -56,7 +56,7 @@ export function renderTopic(id, params) {
     ${TABS.map(([k, l]) => `<a role="tab" aria-selected="${k === tab}" class="tab" href="#/topic/${id}?tab=${k}">${l} <span class="mono n">${counts[k]}</span></a>`).join('')}
   </div>
 
-  ${tab === 'notes' ? notesTab(t, notes) : tab === 'cards' ? cardsTab(t, cards) : quizTab(t, qs)}`;
+  ${tab === 'notes' ? notesTab(t, notes) : tab === 'files' ? filesTab(t) : tab === 'cards' ? cardsTab(t, cards) : quizTab(t, qs)}`;
 }
 
 function boardCard(t) {
@@ -79,9 +79,15 @@ function boardCard(t) {
 }
 
 function newNoteButtons(t) {
-  return `<button class="btn primary" data-action="note-new" data-topic="${t.id}">+ Nota di testo</button>
-    <label class="btn file-btn"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Foto degli appunti
-      <input type="file" accept="image/*,application/pdf" multiple data-change="att-new-note" data-topic="${t.id}" hidden></label>`;
+  return `<button class="btn primary" data-action="note-new" data-topic="${t.id}">+ Nota di testo</button>`;
+}
+
+function filesTab(t) {
+  const body = att.attachmentsSections(t.id);
+  return `<section class="files-tab" data-drop-topic="${t.id}">
+    <div class="sec-head"><h2>Allegati</h2><div class="btn-group">${att.addButtons(t.id)}</div></div>
+    ${body || emptyState('Nessun allegato', 'Qui raccogli tutto quello che non scrivi tu: foto del quaderno o della lavagna, registrazioni della lezione, video e dispense PDF. Puoi anche trascinare i file qui.', att.addButtons(t.id))}
+  </section>`;
 }
 
 function noteCard(n) {
@@ -107,7 +113,7 @@ function notesTab(t, notes) {
   return `<section>
     <div class="sec-head"><h2>Note</h2><div class="btn-group">${newNoteButtons(t)}</div></div>
     ${notes.length ? `<div class="note-grid">${notes.map(noteCard).join('')}</div>`
-      : emptyState('Nessuna nota', 'Scrivi quello che impari con parole tue, a tastiera o con la penna del tablet, oppure fotografa gli appunti del quaderno. Spiegare con parole tue è il modo più veloce per capire cosa non ti è chiaro.', newNoteButtons(t))}
+      : emptyState('Nessuna nota', 'Scrivi quello che impari con parole tue: è il modo più veloce per capire cosa non ti è chiaro. Per scrivere a mano usa il Quaderno qui sopra; foto, audio e video vanno negli Allegati.', newNoteButtons(t))}
   </section>`;
 }
 
@@ -168,9 +174,10 @@ function noteBar(n, extra = '') {
 
 function attachSection(n) {
   const g = att.gallery(n.id);
-  return `<section class="att-section" data-drop="${n.id}">
-    <div class="sec-head"><h3>Allegati</h3><div class="btn-group">${att.pickerButtons(n.id, { compact: true })}</div></div>
-    ${g || '<p class="hint">Foto del quaderno, lavagna o PDF. Puoi anche trascinarli qui o incollarli nella nota.</p>'}
+  if (!g) return '';
+  return `<section class="att-section">
+    <div class="sec-head"><h3>File di questa nota</h3><a class="link" href="#/topic/${n.topicId}?tab=files">Tutti gli allegati →</a></div>
+    ${g}
   </section>`;
 }
 
@@ -244,25 +251,23 @@ export function mountNote(id) {
       onInput();
     }
   });
-  // Paste or drop images/PDFs to attach them.
+  // Paste or drop files: they go to the topic's Allegati.
   const root = document.querySelector('.note-editor');
+  const addToTopic = async (files) => {
+    const k = await att.addFiles({ topicId: n.topicId }, files);
+    if (k) toast(`${plural(k, 'file aggiunto', 'file aggiunti')} agli Allegati`);
+  };
   root.addEventListener('paste', async (e) => {
-    const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/') || f.type === 'application/pdf');
+    const files = [...(e.clipboardData?.files || [])];
     if (!files.length) return;
     e.preventDefault();
-    await saveNoteNow(id);
-    const k = await att.addFiles(id, files);
-    if (k) { toast(`${plural(k, 'allegato aggiunto', 'allegati aggiunti')}`); refreshAttachments(id); }
+    await addToTopic(files);
   });
-  const drop = root.querySelector('[data-drop]');
-  root.addEventListener('dragover', (e) => { if ([...e.dataTransfer.types].includes('Files')) { e.preventDefault(); drop.classList.add('dragging'); } });
-  root.addEventListener('dragleave', (e) => { if (!root.contains(e.relatedTarget)) drop.classList.remove('dragging'); });
+  root.addEventListener('dragover', (e) => { if ([...e.dataTransfer.types].includes('Files')) e.preventDefault(); });
   root.addEventListener('drop', async (e) => {
     if (!e.dataTransfer.files.length) return;
-    e.preventDefault(); drop.classList.remove('dragging');
-    await saveNoteNow(id);
-    const k = await att.addFiles(id, [...e.dataTransfer.files]);
-    if (k) { toast(`${plural(k, 'allegato aggiunto', 'allegati aggiunti')}`); refreshAttachments(id); }
+    e.preventDefault();
+    await addToTopic([...e.dataTransfer.files]);
   });
 
   if (n.type === 'ink') {
@@ -278,16 +283,12 @@ function refreshAttachments(id) {
   const sec = document.querySelector('.att-section');
   const n = store.get(id);
   if (!sec || !n) return;
+  const html = attachSection(n);
+  if (!html) { sec.remove(); return; }
   const tmp = document.createElement('div');
-  tmp.innerHTML = attachSection(n);
+  tmp.innerHTML = html;
   sec.replaceWith(tmp.firstElementChild);
   att.hydrate(document.querySelector('.att-section'));
-  // show the transcribe button now that there are images
-  if (!document.getElementById('btn-transcribe') && att.attachmentsOf(id).some((a) => a.mime.startsWith('image/'))) {
-    const g = document.querySelector('.note-bar .btn-group');
-    document.querySelector('.note-editor')?.classList.toggle('photos-first', !(document.getElementById('note-body')?.value || '').trim());
-    g?.insertAdjacentHTML('afterbegin', `<button class="btn" data-action="ai-transcribe" data-note="${id}" id="btn-transcribe">✦ Trascrivi</button>`);
-  }
 }
 
 // Called by the router when leaving a note: flush pending save, drop empty notes.
@@ -395,6 +396,12 @@ function openAiModal(topicId, mode = 'both', noteId = '', { fromBoard = false } 
       <h2>Genera con AI</h2>
       <p class="muted">Da <b>${esc(t.title)}</b>. Potrai scegliere cosa tenere prima di salvare.</p>
       ${board.hasContent(topicId) ? `<fieldset class="field"><legend>Quaderno</legend><label class="check"><input type="checkbox" name="board" value="1" ${fromBoard || !notes.some((n) => n.boardTranscript) ? 'checked' : ''}> Appunti a mano del quaderno <span class="muted small">${plural(board.strokeTotal(topicId), 'tratto', 'tratti')}${notes.some((n) => n.boardTranscript) ? ' · c\'è già la trascrizione tra le note' : ''}</span></label></fieldset>` : ''}
+      ${(() => {
+        const files = att.topicAttachments(topicId).filter((a) => a.mime.startsWith('image/') || a.mime === 'application/pdf');
+        if (!files.length) return '';
+        const preselect = !notes.length && !board.hasContent(topicId);
+        return `<fieldset class="field"><legend>Allegati (foto e PDF)</legend><div class="check-list">${files.map((a) => `<label class="check"><input type="checkbox" name="att" value="${a.id}" ${preselect ? 'checked' : ''}> ${esc(a.name)} <span class="muted small">${a.mime === 'application/pdf' ? 'PDF' : 'foto'}</span></label>`).join('')}</div><span class="hint">Audio e video non si possono ancora usare con l'AI.</span></fieldset>`;
+      })()}
       ${notes.length ? `<fieldset class="field"><legend>Note da usare</legend><div class="check-list">${notes.map((n) => `<label class="check"><input type="checkbox" name="note" value="${n.id}" ${fromBoard ? (n.boardTranscript ? 'checked' : '') : !noteId || noteId === n.id ? 'checked' : ''}> ${esc(n.title || (n.type === 'ink' ? 'Appunti a mano' : 'Nota senza titolo'))} <span class="muted small">${noteSummary(n)}</span></label>`).join('')}</div></fieldset>` : ''}
       <div class="field"><label for="ai-extra">${notes.length ? 'Testo aggiuntivo (facoltativo)' : 'Incolla il materiale da studiare'}</label><textarea id="ai-extra" name="extra" rows="${notes.length ? 3 : 7}" placeholder="Appunti, un paragrafo del libro, una trascrizione…"></textarea></div>
       <div class="row2">
@@ -490,6 +497,30 @@ async function transcribeBoard(el) {
   } finally { el.disabled = false; el.textContent = label; }
 }
 
+async function transcribePhotos(el, photos) {
+  if (!ai.hasKey()) { needKeyModal(); return; }
+  if (!photos.length) return;
+  const label = el.textContent;
+  el.disabled = true; el.textContent = 'Preparo…';
+  try {
+    const media = [];
+    for (const a of photos.slice(0, 20)) { const b = await att.getBlob(a.id); if (b) media.push(await ai.imageToMedia(b, `Foto "${a.name}"`)); }
+    if (!media.length) { toast('Le foto non sono disponibili su questo dispositivo.', 'bad'); return; }
+    el.textContent = `Trascrivo ${plural(media.length, 'foto', 'foto')}…`;
+    const text = await ai.transcribe({ media });
+    const topicId = photos[0].topicId;
+    const title = photos.length === 1 ? `Trascrizione: ${photos[0].name}` : `Trascrizione delle foto (${fmtDate(today())})`;
+    const note = await store.put('note', { topicId, title, body: text, created: today() });
+    closeModal();
+    openModal(`<h2>Trascrizione pronta</h2>
+      <p class="muted">L'ho salvata tra le Note come "${esc(title)}". Rileggila e correggi quello che l'AI ha letto male.</p>
+      <article class="md transcript-preview">${renderMarkdown(text)}</article>
+      <div class="modal-foot"><div class="row gap push"><button class="btn" data-action="close-modal">Chiudi</button><a class="btn primary" href="#/note/${note.id}">Apri e correggi</a></div></div>`, { wide: true });
+  } catch (e) {
+    toast(e.message, 'bad');
+  } finally { el.disabled = false; el.textContent = label; }
+}
+
 registerActions({
   'board-transcribe': (el) => transcribeBoard(el),
   'note-new': async (el) => {
@@ -517,30 +548,22 @@ registerActions({
     const files = [...(input.files || [])];
     input.value = '';
     if (!files.length) return;
-    const id = input.dataset.note;
-    await saveNoteNow(id);
-    const k = await att.addFiles(id, files);
-    if (k) { toast(plural(k, 'allegato aggiunto', 'allegati aggiunti')); refreshAttachments(id); }
+    const topicId = input.dataset.topic || store.get(input.dataset.note)?.topicId;
+    toast(files.length > 1 ? `Aggiungo ${files.length} file…` : 'Aggiungo il file…');
+    const k = await att.addFiles({ topicId }, files);
+    if (k) toast(plural(k, 'allegato aggiunto', 'allegati aggiunti'));
   },
-  'att-new-note': async (input) => {
-    const files = [...(input.files || [])];
-    input.value = '';
-    if (!files.length) return;
-    const d = new Date();
-    const n = await store.put('note', { topicId: input.dataset.topic, title: `Appunti del ${d.toLocaleDateString('it-IT', { day: 'numeric', month: 'long' })}`, body: '', created: today() });
-    const k = await att.addFiles(n.id, files);
-    if (!k) { await store.remove(n.id); return; }
-    toast(plural(k, 'allegato aggiunto', 'allegati aggiunti'));
-    navigate(`#/note/${n.id}`);
-  },
+  'rec-open': (el) => att.openRecorder(el.dataset.topic),
   'att-open': (el) => { if (el.dataset.id) att.openViewer(el.dataset.id); },
   'att-delete': async (el) => {
     const a = store.get(el.dataset.id);
     await att.removeAttachment(el.dataset.id);
     closeModal();
     toast('Allegato eliminato');
-    if (a) refreshAttachments(a.noteId);
+    if (a?.noteId) refreshAttachments(a.noteId);
   },
+  'ai-transcribe-photos': (el) => transcribePhotos(el, att.topicAttachments(el.dataset.topic).filter((a) => a.mime.startsWith('image/'))),
+  'ai-transcribe-photo': (el) => { const a = store.get(el.dataset.id); if (a) transcribePhotos(el, [a]); },
 
   /* --- transcription --- */
   'ai-transcribe': async (el) => {
@@ -628,6 +651,10 @@ registerActions({
     aiAbort = new AbortController();
     try {
       let media = await noteMedia(picked);
+      for (const aid of fd.getAll('att')) {
+        const a = store.get(aid); const b = a && await att.getBlob(aid);
+        if (b) media.push(a.mime === 'application/pdf' ? await ai.pdfToMedia(b, `Allegato "${a.name}"`) : await ai.imageToMedia(b, `Foto "${a.name}"`));
+      }
       if (fd.get('board')) {
         const blobs = await board.regionBlobs(topicId);
         for (let i = 0; i < blobs.length; i++) media.unshift(await ai.imageToMedia(blobs[blobs.length - 1 - i], `Quaderno a mano, parte ${blobs.length - i}`));
@@ -659,3 +686,14 @@ registerActions({
 });
 
 export { TOPIC_LADDER };
+
+// Drag files onto the Allegati tab.
+document.addEventListener('dragover', (e) => { if (e.target.closest?.('[data-drop-topic]') && [...e.dataTransfer.types].includes('Files')) { e.preventDefault(); e.target.closest('[data-drop-topic]').classList.add('dragging'); } });
+document.addEventListener('dragleave', (e) => { const z = e.target.closest?.('[data-drop-topic]'); if (z && !z.contains(e.relatedTarget)) z.classList.remove('dragging'); });
+document.addEventListener('drop', async (e) => {
+  const z = e.target.closest?.('[data-drop-topic]');
+  if (!z || !e.dataTransfer.files.length) return;
+  e.preventDefault(); z.classList.remove('dragging');
+  const k = await att.addFiles({ topicId: z.dataset.dropTopic }, [...e.dataTransfer.files]);
+  if (k) toast(plural(k, 'allegato aggiunto', 'allegati aggiunti'));
+});

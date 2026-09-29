@@ -230,6 +230,7 @@ export async function exportJSON() {
   const blobs = [];
   for (const r of live.filter((x) => x.kind === 'attachment')) {
     const b = await getBlobLocal(r.id);
+    if (b && b.size > 15 * 1024 * 1024) continue; // big videos/recordings stay out of the JSON backup (they're on Supabase)
     if (b) blobs.push({ id: r.id, type: b.type || r.data.mime || 'application/octet-stream', data: await blobToBase64(b) });
   }
   return { app: 'skill-ledger', version: 2, exported_at: new Date().toISOString(), records: live, blobs };

@@ -59,8 +59,9 @@ create policy "records_delete_own" on public.records
 -- nella propria cartella, che ha come nome il suo id utente.
 -- ---------------------------------------------------------------------------
 insert into storage.buckets (id, name, public, file_size_limit)
-values ('attachments', 'attachments', false, 26214400)  -- 25 MB per file
+values ('attachments', 'attachments', false, 52428800)  -- 50 MB per file (foto, audio, video, PDF)
 on conflict (id) do nothing;
+update storage.buckets set file_size_limit = 52428800 where id = 'attachments';
 
 drop policy if exists "attachments_select_own" on storage.objects;
 create policy "attachments_select_own" on storage.objects
