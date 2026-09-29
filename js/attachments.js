@@ -1,5 +1,6 @@
-// Files attached to a topic: photos, videos, voice recordings and PDFs.
+// Files attached to a topic: photos, videos, voice recordings, PDFs and web links.
 // Record: { kind: 'attachment', topicId, noteId?, name, mime, size, w, h, duration, poster, remote, created }
+// Links: { kind: 'attachment', topicId, mime: 'text/uri-list', url, name, desc, remote: true, created } (no file).
 //   noteId is set only for files attached from inside a note (older versions or paste into a note).
 //   Photos placed on the Quaderno have board: true and are managed by board.js.
 // File: stored in IndexedDB "blobs" by attachment id, synced via Supabase Storage.
@@ -22,7 +23,8 @@ const EXT_TYPES = {
 };
 export const typeOf = (file) => file.type || EXT_TYPES[(file.name || '').split('.').pop().toLowerCase()] || '';
 
-export const kindOf = (mime = '') => (mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : mime.startsWith('audio/') ? 'audio' : mime === 'application/pdf' ? 'pdf' : 'other');
+export const LINK_MIME = 'text/uri-list';
+export const kindOf = (mime = '') => (mime === LINK_MIME ? 'link' : mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : mime.startsWith('audio/') ? 'audio' : mime === 'application/pdf' ? 'pdf' : 'other');
 const byDate = (a, b) => (b.created || '').localeCompare(a.created || '') || b.updated_at - a.updated_at;
 
 export const attachmentsOf = (noteId) => store.all('attachment').filter((a) => a.noteId === noteId && !a.board)
@@ -148,7 +150,9 @@ export async function addBoardImage(topicId, file, { cx, cy, maxW = 800 }) {
 }
 
 export async function removeAttachment(id) {
+  const link = kindOf(store.get(id)?.mime) === 'link';
   await store.remove(id);
+  if (link) return;
   await store.deleteBlob(id);
   const u = urls.get(id); if (u) { URL.revokeObjectURL(u); urls.delete(id); }
 }
@@ -170,6 +174,8 @@ const ICONS = {
   camera: '<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
   mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
   video: '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.1 1.1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.1-1.1"/>',
+  ext: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
   clip: '<path d="M20 12.5l-7.8 7.8a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4L15 7.9"/>',
 };
 export const icon = (k) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICONS[k]}</svg>`;
@@ -178,14 +184,15 @@ export function addButtons(topicId) {
   return `<label class="btn file-btn">${icon('camera')}Scatta foto<input type="file" accept="image/*" capture="environment" data-change="att-add" data-topic="${topicId}" hidden></label>
     <button class="btn" data-action="rec-open" data-topic="${topicId}">${icon('mic')}Registra audio</button>
     <label class="btn file-btn">${icon('video')}Registra video<input type="file" accept="video/*" capture="environment" data-change="att-add" data-topic="${topicId}" hidden></label>
-    <label class="btn file-btn">${icon('clip')}Carica file<input type="file" accept="image/*,video/*,audio/*,application/pdf" multiple data-change="att-add" data-topic="${topicId}" hidden></label>`;
+    <label class="btn file-btn">${icon('clip')}Carica file<input type="file" accept="image/*,video/*,audio/*,application/pdf" multiple data-change="att-add" data-topic="${topicId}" hidden></label>
+    <button class="btn" data-action="link-new" data-topic="${topicId}">${icon('link')}Aggiungi link</button>`;
 }
 
 const origin = (a) => { const n = a.noteId && store.get(a.noteId); return n ? ` · da "${esc(n.title || 'nota')}"` : ''; };
 
 export function attachmentsSections(topicId) {
   const all = topicAttachments(topicId);
-  const g = { image: [], video: [], audio: [], pdf: [] };
+  const g = { link: [], image: [], video: [], audio: [], pdf: [] };
   all.forEach((a) => (g[kindOf(a.mime)] || []).push(a));
   const sec = (title, count, body, extra = '') => `<section class="att-block"><div class="sec-head"><h3>${title} <span class="mono muted n">${count}</span></h3>${extra}</div>${body}</section>`;
   const out = [];
@@ -207,6 +214,17 @@ export function attachmentsSections(topicId) {
         <audio controls preload="none" data-att-media="${a.id}"></audio>
       </div>
       <button class="btn sm ghost" data-action="att-open" data-id="${a.id}" aria-label="Dettagli">⋯</button>
+    </div>`).join('')}</div>`));
+  if (g.link.length) out.push(sec('Link', g.link.length, `<div class="list">${g.link.map((a) => `
+    <div class="list-row link-row">
+      <a class="link-main" href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">
+        <span class="link-ico">${icon(isVideoSite(a.url) ? 'video' : 'link')}</span>
+        <span class="grow"><span class="block link-title">${esc(a.name)}</span>
+          ${a.desc ? `<span class="block small muted link-desc">${esc(a.desc)}</span>` : ''}
+          <span class="meta"><span class="mono">${esc(domainOf(a.url))}</span><span>${a.created ? fmtDate(a.created.slice(0, 10)) : ''}</span></span></span>
+        <span class="link-go" aria-hidden="true">${icon('ext')}</span>
+      </a>
+      <button class="btn sm ghost" data-action="link-edit" data-id="${a.id}" aria-label="Modifica link">⋯</button>
     </div>`).join('')}</div>`));
   if (g.pdf.length) out.push(sec('Documenti PDF', g.pdf.length, `<div class="list">${g.pdf.map((a) => `
     <button class="list-row" data-action="att-open" data-id="${a.id}"><span class="pdf-badge mono">PDF</span><span class="grow"><span class="block">${esc(a.name)}</span><span class="meta"><span>${fmtSize(a.size)}</span>${origin(a)}</span></span></button>`).join('')}</div>`));
@@ -263,6 +281,7 @@ export async function openViewer(id) {
   const a = store.get(id);
   if (!a) return;
   const kind = kindOf(a.mime);
+  if (kind === 'link') { openLinkModal({ id }); return; }
   const list = (a.noteId && !a.topicId ? attachmentsOf(a.noteId) : topicAttachments(a.topicId)).filter((x) => kindOf(x.mime) === kind);
   const idx = list.findIndex((x) => x.id === id);
   const prev = list[idx - 1]; const next = list[idx + 1];
@@ -292,6 +311,85 @@ export async function openViewer(id) {
     const cur = store.get(a.id); const v = name.value.trim();
     if (cur && v && v !== cur.name) { await store.put('attachment', { ...cur, name: v }); toast('Nome aggiornato'); }
   });
+}
+
+/* ---------- links ---------- */
+// Accepts "wikipedia.org/wiki/X" as well as full addresses; only http(s) links are kept.
+export function normalizeUrl(raw) {
+  let v = String(raw || '').trim();
+  if (!v) return null;
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(v)) v = 'https://' + v.replace(/^\/+/, '');
+  try {
+    const u = new URL(v);
+    if (!/^https?:$/.test(u.protocol) || !u.hostname.includes('.') && u.hostname !== 'localhost') return null;
+    return u.href;
+  } catch { return null; }
+}
+export const domainOf = (url) => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; } };
+const isVideoSite = (url) => /(^|\.)(youtube\.com|youtu\.be|vimeo\.com)$/.test(domainOf(url));
+// First web address inside a piece of text (Android "Condividi" often puts the link in the text).
+export const findUrl = (text) => (String(text || '').match(/https?:\/\/[^\s<>"']+/i) || [])[0] || '';
+// A readable default title: "wikipedia.org › Fotosintesi"
+function titleFromUrl(url) {
+  try {
+    const u = new URL(url);
+    const last = decodeURIComponent(u.pathname.split('/').filter(Boolean).pop() || '').replace(/\.[a-z0-9]{2,5}$/i, '').replace(/[-_+]+/g, ' ').trim();
+    return last && last.length < 80 && !/^\d+$/.test(last) ? `${domainOf(url)} › ${last}` : domainOf(url);
+  } catch { return url; }
+}
+
+function topicSelect(selected) {
+  const areas = store.all('area').sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const topics = store.all('topic');
+  const groups = areas.map((a) => [a.name, topics.filter((t) => t.areaId === a.id)]).filter(([, l]) => l.length);
+  const orphans = topics.filter((t) => !areas.some((a) => a.id === t.areaId));
+  if (orphans.length) groups.push(['Senza area', orphans]);
+  const opt = (t) => `<option value="${t.id}" ${t.id === selected ? 'selected' : ''}>${esc(t.title)}</option>`;
+  return groups.map(([name, list]) => `<optgroup label="${esc(name)}">${list.sort((a, b) => (a.title || '').localeCompare(b.title || '')).map(opt).join('')}</optgroup>`).join('');
+}
+
+// New link (topicId), edit (id), or a link shared from another app (url/title, topic to choose).
+export function openLinkModal({ id = '', topicId = '', url = '', title = '', pickTopic = false } = {}) {
+  const a = id ? store.get(id) : null;
+  if (id && !a) return;
+  let tid = a?.topicId || topicId;
+  if (pickTopic && !tid) {
+    const last = store.getMeta('lastLinkTopic', '');
+    tid = store.get(last) ? last : store.all('topic').sort((x, y) => y.updated_at - x.updated_at)[0]?.id || '';
+  }
+  if (pickTopic && !store.all('topic').length) {
+    openModal(`<h2>Salva link</h2><p>Prima crea almeno un argomento: il link viene salvato tra i suoi Allegati.</p>
+      <div class="modal-foot"><div class="row gap push"><button class="btn" data-action="close-modal">Chiudi</button><a class="btn primary" href="#/areas" data-action="close-modal">Vai alle aree</a></div></div>`);
+    return;
+  }
+  openModal(`
+    <form data-form="link-save" data-id="${a?.id || ''}" data-topic="${tid}" class="link-form">
+      <h2>${a ? 'Modifica link' : pickTopic ? 'Salva link' : 'Aggiungi link'}</h2>
+      <div class="field"><label for="l-url">Indirizzo</label><input id="l-url" name="url" type="text" ${a || url ? '' : 'autofocus'} inputmode="url" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="https://…" value="${esc(a?.url || url)}" required></div>
+      <div class="field"><label for="l-title">Titolo <span class="hint">facoltativo</span></label><input id="l-title" name="title" type="text" ${a || url ? 'autofocus' : ''} value="${esc(a?.name || title)}" placeholder="Per esempio: Video sulla fotosintesi"></div>
+      <div class="field"><label for="l-desc">Perché è utile <span class="hint">facoltativo</span></label><textarea id="l-desc" name="desc" rows="2" placeholder="Una riga per ricordarti cosa c'è">${esc(a?.desc || '')}</textarea></div>
+      ${pickTopic ? `<div class="field"><label for="l-topic">Argomento</label><select id="l-topic" name="topicId">${topicSelect(tid)}</select></div>` : ''}
+      <p class="error" data-error hidden></p>
+      <div class="modal-foot">
+        ${a ? `<span class="row gap"><a class="btn" href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">${icon('ext')}Apri</a><span class="confirm-wrap"><button type="button" class="btn danger" data-action="confirm-step">Elimina</button><button type="button" class="btn danger solid" data-action="att-delete" data-id="${a.id}" hidden>Conferma</button></span></span>` : ''}
+        <div class="row gap push"><button type="button" class="btn" data-action="close-modal">Annulla</button><button class="btn primary" type="submit">Salva</button></div>
+      </div>
+    </form>`);
+}
+
+// Returns the saved record, or an error message.
+export async function saveLink({ id, topicId, url, title, desc }) {
+  const href = normalizeUrl(url);
+  if (!href) return { error: 'Questo non sembra un indirizzo web. Esempio: https://it.wikipedia.org/wiki/Fotosintesi' };
+  if (!topicId || !store.get(topicId)) return { error: 'Scegli un argomento.' };
+  const prev = id ? store.get(id) : null;
+  const rec = await store.put('attachment', {
+    ...(prev || {}), id: id || uid(), topicId, noteId: '', mime: LINK_MIME, url: href,
+    name: String(title || '').trim() || titleFromUrl(href), desc: String(desc || '').trim(),
+    size: 0, remote: true, created: prev?.created || new Date().toISOString(),
+  });
+  await store.setMeta('lastLinkTopic', topicId);
+  return { rec };
 }
 
 /* ---------- voice recorder ---------- */

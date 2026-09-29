@@ -5,15 +5,15 @@
 //   { kind: 'tile', topicId, tx, ty, s: [stroke, ...] }   (stroke format as in ink.js)
 // so a big notebook syncs in small pieces and two devices rarely touch the same record.
 // Photos placed on the board are attachments with { board: true, x, y, bw, bh } in world units.
-// Board settings live on the topic: topic.board = { paper }.
+// Board settings live on the topic: topic.board = { paper, dark }.
+// dark = black paper; strokes keep their colour and are shown in a light version (see ink.js).
 
 import * as store from './store.js';
-import { drawStroke, PEN_COLORS, HL_COLORS, SIZES } from './ink.js';
+import { drawStroke, PEN_COLORS, HL_COLORS, SIZES, paperColor, shownColor, lineColor } from './ink.js';
 import * as att from './attachments.js';
 import { today, toast, debounce } from './util.js';
 
 const TILE = 1024;
-const PAPER = '#FFFEFA';
 const MIN_Z = 0.08;
 const MAX_Z = 6;
 
@@ -21,6 +21,7 @@ export const tilesOf = (topicId) => store.all('tile').filter((t) => t.topicId ==
 export const boardImagesOf = (topicId) => store.all('attachment').filter((a) => a.topicId === topicId && a.board);
 export const strokeTotal = (topicId) => tilesOf(topicId).reduce((n, t) => n + (t.s?.length || 0), 0);
 export const hasContent = (topicId) => strokeTotal(topicId) > 0 || boardImagesOf(topicId).length > 0;
+export const isDark = (topicId) => !!store.get(topicId)?.board?.dark;
 export const lastEdit = (topicId) => Math.max(0, ...tilesOf(topicId).map((t) => t.updated_at), ...boardImagesOf(topicId).map((a) => a.updated_at));
 
 /* ---------- geometry ---------- */
@@ -66,7 +67,7 @@ function bitmapFor(a, onReady) {
 }
 
 /* ---------- static rendering (previews, AI) ---------- */
-function drawPattern(g, paper, view, W, H, dpr, { faint = false } = {}) {
+function drawPattern(g, paper, view, W, H, dpr, { faint = false, dark = false } = {}) {
   if (paper === 'blank') return;
   let step = 40;
   while (step * view.z < 14) step *= 2; // keep lines at least 14 css px apart when zoomed out
@@ -75,33 +76,33 @@ function drawPattern(g, paper, view, W, H, dpr, { faint = false } = {}) {
   const oy = ((-view.y * view.z * dpr) % sx + sx) % sx;
   g.save();
   if (paper === 'grid' || paper === 'lined') {
-    g.strokeStyle = faint ? '#EEF1F6' : paper === 'lined' ? '#D9DFEA' : '#E6EAF1';
+    g.strokeStyle = lineColor(paper === 'lined' ? 'lined' : 'grid', dark, faint);
     g.lineWidth = Math.max(1, dpr * 0.8);
     g.beginPath();
     if (paper === 'grid') for (let x = ox; x < W; x += sx) { g.moveTo(Math.round(x) + 0.5, 0); g.lineTo(Math.round(x) + 0.5, H); }
     for (let y = oy; y < H; y += sx) { g.moveTo(0, Math.round(y) + 0.5); g.lineTo(W, Math.round(y) + 0.5); }
     g.stroke();
   } else if (paper === 'dots') {
-    g.fillStyle = faint ? '#E3E7EE' : '#C5CCD8';
+    g.fillStyle = lineColor('dots', dark, faint);
     const r = Math.max(1, 1.4 * dpr * Math.min(1, view.z));
     for (let x = ox; x < W; x += sx) for (let y = oy; y < H; y += sx) g.fillRect(x - r / 2, y - r / 2, r, r);
   }
   g.restore();
 }
 
-function drawWorld(g, topicId, tiles, images, view, W, H, dpr, { onBitmap, skipStroke } = {}) {
+function drawWorld(g, topicId, tiles, images, view, W, H, dpr, { onBitmap, skipStroke, dark = false } = {}) {
   const vis = [view.x, view.y, view.x + W / (view.z * dpr), view.y + H / (view.z * dpr)];
   g.setTransform(view.z * dpr, 0, 0, view.z * dpr, -view.x * view.z * dpr, -view.y * view.z * dpr);
   for (const a of images) {
     if (!overlaps(imgBox(a), vis)) continue;
     const bmp = bitmapFor(a, onBitmap);
     if (bmp) g.drawImage(bmp, a.x, a.y, a.bw, a.bh);
-    else { g.fillStyle = '#ECEEF3'; g.fillRect(a.x, a.y, a.bw, a.bh); }
+    else { g.fillStyle = dark ? '#2A2F39' : '#ECEEF3'; g.fillRect(a.x, a.y, a.bw, a.bh); }
   }
   for (const t of tiles) {
     for (const st of t.s || []) {
       if (st === skipStroke) continue;
-      if (overlaps(strokeBox(st), vis)) drawStroke(g, st, 1);
+      if (overlaps(strokeBox(st), vis)) drawStroke(g, st, 1, dark);
     }
   }
   g.setTransform(1, 0, 0, 1, 0, 0);
@@ -110,24 +111,26 @@ function drawWorld(g, topicId, tiles, images, view, W, H, dpr, { onBitmap, skipS
 // Preview image of the whole board for the topic page (data URL, cached per edit).
 const thumbCache = new Map();
 export function thumbnail(topicId, width = 640, height = 240) {
-  const key = `${topicId}:${lastEdit(topicId)}:${width}x${height}`;
+  const dark = isDark(topicId);
+  const key = `${topicId}:${lastEdit(topicId)}:${width}x${height}:${dark ? 'd' : 'l'}`;
   if (thumbCache.has(key)) return thumbCache.get(key);
   const b = contentBounds(topicId);
   if (!b) return '';
   const c = document.createElement('canvas');
   c.width = width; c.height = height;
   const g = c.getContext('2d');
-  g.fillStyle = PAPER; g.fillRect(0, 0, width, height);
+  g.fillStyle = paperColor(dark); g.fillRect(0, 0, width, height);
   const pad = 30;
   const z = Math.min(1.2, (width - pad * 2) / Math.max(1, b[2] - b[0]), (height - pad * 2) / Math.max(1, b[3] - b[1]));
   const view = { x: (b[0] + b[2]) / 2 - width / 2 / z, y: (b[1] + b[3]) / 2 - height / 2 / z, z };
-  drawWorld(g, topicId, tilesOf(topicId), boardImagesOf(topicId), view, width, height, 1);
+  drawWorld(g, topicId, tilesOf(topicId), boardImagesOf(topicId), view, width, height, 1, { dark });
   const url = c.toDataURL('image/png');
   thumbCache.set(key, url);
   return url;
 }
 
 // Render the board as page-sized JPEG regions for the AI (skips empty regions).
+// Always dark ink on white, even for a black board: that's what handwriting recognition reads best.
 export async function regionBlobs(topicId, { maxRegions = 16 } = {}) {
   const b = contentBounds(topicId);
   if (!b) return [];
@@ -182,6 +185,9 @@ export function mountBoard(root, topic, { onAction } = {}) {
   loadTiles();
 
   let paper = topic.board?.paper || 'grid';
+  let dark = !!topic.board?.dark;
+  const applyBg = () => { stage.style.background = paperColor(dark); root.classList.toggle('dark-paper', dark); };
+  applyBg();
   const tool = { t: 'p', c: PEN_COLORS[0], hc: HL_COLORS[0], size: 1, mode: 'draw' }; // mode: draw | erase | select | hand
   let fingerMode = store.getMeta('inkFinger', null);
   const undo = []; const redo = [];
@@ -218,9 +224,9 @@ export function mountBoard(root, topic, { onAction } = {}) {
   function redraw() {
     if (!W) return;
     g.setTransform(1, 0, 0, 1, 0, 0);
-    g.fillStyle = PAPER; g.fillRect(0, 0, W, H);
-    drawPattern(g, paper, view, W, H, dpr);
-    drawWorld(g, topicId, allTiles(), images, view, W, H, dpr, { onBitmap: () => requestAnimationFrame(redraw) });
+    g.fillStyle = paperColor(dark); g.fillRect(0, 0, W, H);
+    drawPattern(g, paper, view, W, H, dpr, { dark });
+    drawWorld(g, topicId, allTiles(), images, view, W, H, dpr, { dark, onBitmap: () => requestAnimationFrame(redraw) });
     drawOverlay();
     const zl = zoomLabel(); if (zl) zl.textContent = `${Math.round(view.z * 100)}%`;
   }
@@ -231,17 +237,18 @@ export function mountBoard(root, topic, { onAction } = {}) {
       og.setTransform(view.z * dpr, 0, 0, view.z * dpr, -view.x * view.z * dpr, -view.y * view.z * dpr);
       const st = active.st;
       const lastP = st.p[st.p.length - 1];
-      drawStroke(og, active.pred?.length ? { ...st, p: st.p.concat(active.pred.flatMap(([x, y]) => [x, y, lastP])) } : st, 1);
+      drawStroke(og, active.pred?.length ? { ...st, p: st.p.concat(active.pred.flatMap(([x, y]) => [x, y, lastP])) } : st, 1, dark);
       og.setTransform(1, 0, 0, 1, 0, 0);
     }
     const sel = images.find((a) => a.id === selected);
     if (sel) {
       const [sx, sy] = toScreen(sel.x, sel.y);
       const sw = sel.bw * view.z * dpr; const sh = sel.bh * view.z * dpr;
-      og.strokeStyle = '#3552C9'; og.lineWidth = 2 * dpr; og.setLineDash([6 * dpr, 4 * dpr]);
+      const selC = dark ? '#86A2FF' : '#3552C9';
+      og.strokeStyle = selC; og.lineWidth = 2 * dpr; og.setLineDash([6 * dpr, 4 * dpr]);
       og.strokeRect(sx, sy, sw, sh);
       og.setLineDash([]);
-      og.fillStyle = '#3552C9';
+      og.fillStyle = selC;
       const hs = 14 * dpr;
       og.fillRect(sx + sw - hs / 2, sy + sh - hs / 2, hs, hs);
     }
@@ -265,7 +272,7 @@ export function mountBoard(root, topic, { onAction } = {}) {
     if (!snap) return;
     const ratio = view.z / snap.view.z;
     g.setTransform(1, 0, 0, 1, 0, 0);
-    g.fillStyle = PAPER; g.fillRect(0, 0, W, H);
+    g.fillStyle = paperColor(dark); g.fillRect(0, 0, W, H);
     g.drawImage(snap.c, (snap.view.x - view.x) * view.z * dpr, (snap.view.y - view.y) * view.z * dpr, W * ratio, H * ratio);
     const zl = zoomLabel(); if (zl) zl.textContent = `${Math.round(view.z * 100)}%`;
   }
@@ -441,7 +448,7 @@ export function mountBoard(root, topic, { onAction } = {}) {
       const key = tileFor(a.st);
       tiles.get(key).s.push(a.st);
       g.setTransform(view.z * dpr, 0, 0, view.z * dpr, -view.x * view.z * dpr, -view.y * view.z * dpr);
-      drawStroke(g, a.st, 1);
+      drawStroke(g, a.st, 1, dark);
       g.setTransform(1, 0, 0, 1, 0, 0);
       drawOverlay();
       undo.push({ op: 'add', key, st: a.st }); redo.length = 0; touch(key); renderBar();
@@ -533,7 +540,7 @@ export function mountBoard(root, topic, { onAction } = {}) {
         <button type="button" data-b="mode" data-v="hand" aria-pressed="${is('hand')}" title="Sposta il foglio">${svg('hand')}<span>Sposta</span></button>
       </div>
       ${tool.mode === 'draw' ? `
-      <div class="ink-group swatches-ink" aria-label="Colore">${colors.map((c) => `<button type="button" data-b="color" data-v="${c}" aria-pressed="${c === cur}" style="--sw:${c}" title="Colore"></button>`).join('')}</div>
+      <div class="ink-group swatches-ink" aria-label="Colore">${colors.map((c) => `<button type="button" data-b="color" data-v="${c}" aria-pressed="${c === cur}" style="--sw:${shownColor(c, dark)}" title="Colore"></button>`).join('')}</div>
       <div class="ink-group" aria-label="Spessore">${[0, 1, 2].map((i) => `<button type="button" data-b="size" data-v="${i}" aria-pressed="${tool.size === i}" title="Spessore ${i + 1}"><i style="width:${[4, 7, 11][i]}px;height:${[4, 7, 11][i]}px"></i></button>`).join('')}</div>` : ''}
       ${selected ? `<div class="ink-group"><button type="button" data-b="del-img" class="danger-text">Elimina foto</button></div>` : ''}
       <div class="ink-group">
@@ -547,7 +554,8 @@ export function mountBoard(root, topic, { onAction } = {}) {
       </div>
       <div class="ink-group">
         <label class="bar-file" title="Inserisci una foto (fotocamera o galleria)">${svg('img')}<span>Foto</span><input type="file" accept="image/*" multiple data-b-file hidden></label>
-        <select data-b="paper" aria-label="Sfondo">${[['grid', 'Quadretti'], ['lined', 'Righe'], ['dots', 'Puntini'], ['blank', 'Bianco']].map(([k, l]) => `<option value="${k}" ${paper === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <select data-b="paper" aria-label="Tipo di foglio">${[['grid', 'Quadretti'], ['lined', 'Righe'], ['dots', 'Puntini'], ['blank', 'Senza righe']].map(([k, l]) => `<option value="${k}" ${paper === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <select data-b="bg" aria-label="Colore del foglio">${[['light', 'Foglio bianco'], ['dark', 'Foglio nero']].map(([k, l]) => `<option value="${k}" ${(dark ? 'dark' : 'light') === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
         <button type="button" data-b="finger" title="Cosa fa il dito sullo schermo">${fingerMode === 'scroll' ? 'Dito: sposta' : 'Dito: scrive'}</button>
       </div>`;
   }
@@ -569,9 +577,11 @@ export function mountBoard(root, topic, { onAction } = {}) {
     renderBar();
   });
   bar.addEventListener('change', (ev) => {
-    if (ev.target.dataset.b === 'paper') {
-      paper = ev.target.value; redraw();
-      const t = store.get(topicId); if (t) store.put('topic', { ...t, board: { ...(t.board || {}), paper } });
+    if (ev.target.dataset.b === 'paper' || ev.target.dataset.b === 'bg') {
+      if (ev.target.dataset.b === 'paper') paper = ev.target.value;
+      else { dark = ev.target.value === 'dark'; applyBg(); renderBar(); }
+      redraw();
+      const t = store.get(topicId); if (t) store.put('topic', { ...t, board: { ...(t.board || {}), paper, dark } });
     }
     if (ev.target.matches('[data-b-file]')) { addImages(ev.target.files); ev.target.value = ''; }
   });
@@ -586,6 +596,8 @@ export function mountBoard(root, topic, { onAction } = {}) {
   /* --- remote changes (another device drew on this board) --- */
   const unsub = store.subscribe((src) => {
     if (src !== 'remote') return;
+    const tb = store.get(topicId)?.board || {};
+    if ((tb.paper || 'grid') !== paper || !!tb.dark !== dark) { paper = tb.paper || 'grid'; dark = !!tb.dark; applyBg(); renderBar(); }
     loadTiles();
     images = boardImagesOf(topicId).map((a) => (active?.img?.id === a.id ? active.img : { ...a }));
     if (!active) redraw();

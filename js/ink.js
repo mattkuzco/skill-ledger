@@ -1,6 +1,6 @@
 // Handwritten notes: a vector ink editor for pens (pressure), mouse and fingers.
 //
-// Data (note.ink): { paper: 'lined'|'grid'|'dots'|'blank', pages: [{ s: [stroke, ...] }] }
+// Data (note.ink): { paper: 'lined'|'grid'|'dots'|'blank', dark?: true, pages: [{ s: [stroke, ...] }] }
 // stroke: { t: 'p' (pen) | 'h' (highlighter), c: color, w: width in page units, p: [x, y, pressure 0-100, ...] }
 // Pages use a fixed logical size (A4 ratio) so strokes look the same on any screen.
 
@@ -9,49 +9,66 @@ import * as store from './store.js';
 export const PAGE_W = 1000;
 export const PAGE_H = 1414;
 const PAPER = '#FFFEFA';
+export const DARK_PAPER = '#16191F';
+export const paperColor = (dark) => (dark ? DARK_PAPER : PAPER);
 
 export const PEN_COLORS = ['#1B2230', '#3552C9', '#B83A3A', '#2B7F55', '#7A4BC4'];
 export const HL_COLORS = ['#F6D743', '#8EE08A', '#FF9FC6', '#8FD3FF'];
+
+// On black paper the same ink is shown in a light version (like OneNote in dark mode):
+// strokes keep their original colour, so switching paper never makes old notes unreadable
+// and the AI always gets dark ink on white.
+const DARK_INK = { '#1B2230': '#F1F3F7', '#3552C9': '#86A2FF', '#B83A3A': '#FF7E7E', '#2B7F55': '#62D69F', '#7A4BC4': '#BD98FF' };
+export const shownColor = (c, dark) => (dark ? DARK_INK[c] || c : c);
+
+// Grid colours for light and dark paper: [normal, faint].
+const LINES = {
+  light: { lined: ['#D9DFEA', '#EEF1F6'], margin: ['#F0BDBD', '#F8E6E6'], grid: ['#E4E8F0', '#F1F3F7'], dots: ['#C9CFDB', '#E8EBF1'] },
+  dark: { lined: ['#2D333F', '#252A33'], margin: ['#5A2F35', '#3D272B'], grid: ['#272C36', '#20242C'], dots: ['#454D5C', '#30353F'] },
+};
+export const lineColor = (what, dark, faint) => LINES[dark ? 'dark' : 'light'][what][faint ? 1 : 0];
 export const SIZES = { p: [2.5, 4.5, 8], h: [18, 28, 40] };
 
 export const emptyInk = () => ({ paper: 'lined', pages: [{ s: [] }] });
 export const strokeCount = (ink) => (ink?.pages || []).reduce((n, pg) => n + pg.s.length, 0);
 
 /* ---------- drawing ---------- */
-function drawPaper(g, paper, scale, { faint = false } = {}) {
-  g.fillStyle = PAPER;
+function drawPaper(g, paper, scale, { faint = false, dark = false } = {}) {
+  g.fillStyle = paperColor(dark);
   g.fillRect(0, 0, PAGE_W * scale, PAGE_H * scale);
   const step = 40 * scale;
   g.save();
   if (paper === 'lined') {
-    g.strokeStyle = faint ? '#EEF1F6' : '#D9DFEA'; g.lineWidth = Math.max(1, scale);
+    g.strokeStyle = lineColor('lined', dark, faint); g.lineWidth = Math.max(1, scale);
     for (let y = 120 * scale; y < PAGE_H * scale; y += step) { g.beginPath(); g.moveTo(0, y); g.lineTo(PAGE_W * scale, y); g.stroke(); }
-    g.strokeStyle = faint ? '#F8E6E6' : '#F0BDBD';
+    g.strokeStyle = lineColor('margin', dark, faint);
     g.beginPath(); g.moveTo(90 * scale, 0); g.lineTo(90 * scale, PAGE_H * scale); g.stroke();
   } else if (paper === 'grid') {
-    g.strokeStyle = faint ? '#F1F3F7' : '#E4E8F0'; g.lineWidth = Math.max(1, scale * 0.8);
+    g.strokeStyle = lineColor('grid', dark, faint); g.lineWidth = Math.max(1, scale * 0.8);
     for (let x = step; x < PAGE_W * scale; x += step) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, PAGE_H * scale); g.stroke(); }
     for (let y = step; y < PAGE_H * scale; y += step) { g.beginPath(); g.moveTo(0, y); g.lineTo(PAGE_W * scale, y); g.stroke(); }
   } else if (paper === 'dots') {
-    g.fillStyle = faint ? '#E8EBF1' : '#C9CFDB';
+    g.fillStyle = lineColor('dots', dark, faint);
     const r = Math.max(1, 1.6 * scale);
     for (let x = step; x < PAGE_W * scale; x += step) for (let y = step; y < PAGE_H * scale; y += step) { g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill(); }
   }
   g.restore();
 }
 
-export function drawStroke(g, st, scale) {
+export function drawStroke(g, st, scale, dark = false) {
   const p = st.p;
   const n = p.length / 3;
   if (!n) return;
   g.save();
   g.lineCap = 'round';
   g.lineJoin = 'round';
-  g.strokeStyle = st.c;
-  g.fillStyle = st.c;
+  const c = shownColor(st.c, dark);
+  g.strokeStyle = c;
+  g.fillStyle = c;
   if (st.t === 'h') {
-    g.globalAlpha = 0.38;
-    g.globalCompositeOperation = 'multiply';
+    // multiply darkens on white paper; on black it would vanish, so there we lighten instead
+    g.globalAlpha = dark ? 0.62 : 0.38;
+    g.globalCompositeOperation = dark ? 'screen' : 'multiply';
     g.lineWidth = st.w * scale;
     g.beginPath();
     g.moveTo(p[0] * scale, p[1] * scale);
@@ -79,15 +96,17 @@ export function drawStroke(g, st, scale) {
   g.restore();
 }
 
-export function renderPage(g, ink, pageIndex, scale, opts) {
-  drawPaper(g, ink.paper, scale, opts);
-  for (const st of ink.pages[pageIndex]?.s || []) drawStroke(g, st, scale);
+// opts.light forces white paper (used for the AI, which reads dark ink on white best).
+export function renderPage(g, ink, pageIndex, scale, opts = {}) {
+  const dark = !!ink.dark && !opts.light;
+  drawPaper(g, ink.paper, scale, { ...opts, dark });
+  for (const st of ink.pages[pageIndex]?.s || []) drawStroke(g, st, scale, dark);
 }
 
 // Small preview of the first page, as a data URL (cached per note version).
 const thumbCache = new Map();
 export function thumbnail(note, width = 240) {
-  const key = `${note.id}:${note.updated_at}:${width}`;
+  const key = `${note.id}:${note.updated_at}:${width}:${note.ink?.dark ? 'd' : 'l'}`;
   if (thumbCache.has(key)) return thumbCache.get(key);
   const scale = width / PAGE_W;
   const c = document.createElement('canvas');
@@ -103,7 +122,7 @@ export async function pageBlob(ink, pageIndex, width = 1000) {
   const scale = width / PAGE_W;
   const c = document.createElement('canvas');
   c.width = width; c.height = Math.round(PAGE_H * scale);
-  renderPage(c.getContext('2d'), ink, pageIndex, scale, { faint: true });
+  renderPage(c.getContext('2d'), ink, pageIndex, scale, { faint: true, light: true });
   return new Promise((res) => c.toBlob(res, 'image/jpeg', 0.85));
 }
 
@@ -150,7 +169,7 @@ export function mountEditor(root, note, { onChange }) {
   }, { rootMargin: '1200px 0px' });
   function addPageEl(i) {
     const wrap = document.createElement('div');
-    wrap.className = 'ink-page';
+    wrap.className = `ink-page${ink.dark ? ' dark' : ''}`;
     wrap.dataset.i = i;
     wrap.innerHTML = `<canvas class="ink-base"></canvas><canvas class="ink-over"></canvas><span class="ink-page-n mono">${i + 1}</span>`;
     pagesEl.appendChild(wrap);
@@ -241,7 +260,7 @@ export function mountEditor(root, note, { onChange }) {
         cancelAnimationFrame(a.raf);
         pages[a.page].og.clearRect(0, 0, pages[a.page].over.width, pages[a.page].over.height);
         ink.pages[a.page].s.push(a.st);
-        drawStroke(pages[a.page].g, a.st, pages[a.page].scale);
+        drawStroke(pages[a.page].g, a.st, pages[a.page].scale, !!ink.dark);
         undo.push({ op: 'add', page: a.page, st: a.st }); redo.length = 0;
         changed();
       } else if (a.kind === 'erase' && a.removed.length) {
@@ -262,7 +281,7 @@ export function mountEditor(root, note, { onChange }) {
     const st = active.st;
     const lastP = st.p[st.p.length - 1];
     const shown = active.pred?.length ? { ...st, p: st.p.concat(active.pred.flatMap(([x, y]) => [x, y, lastP])) } : st;
-    drawStroke(pg.og, shown, pg.scale);
+    drawStroke(pg.og, shown, pg.scale, !!ink.dark);
   }
 
   const bboxes = new WeakMap();
@@ -321,14 +340,15 @@ export function mountEditor(root, note, { onChange }) {
         <button type="button" data-ink="tool" data-v="h" aria-pressed="${!tool.eraser && tool.t === 'h'}" title="Evidenziatore"><svg viewBox="0 0 24 24"><path d="M9 15l-3 5h6l1-2M9 15l7-11 4 3-7 11z"/></svg><span>Evidenziatore</span></button>
         <button type="button" data-ink="tool" data-v="e" aria-pressed="${tool.eraser}" title="Gomma"><svg viewBox="0 0 24 24"><path d="M8 20h12M5 14l8-8 6 6-6 6H9z"/></svg><span>Gomma</span></button>
       </div>
-      <div class="ink-group swatches-ink" aria-label="Colore">${colors.map((c) => `<button type="button" data-ink="color" data-v="${c}" aria-pressed="${c === cur}" style="--sw:${c}" title="${c}"></button>`).join('')}</div>
+      <div class="ink-group swatches-ink" aria-label="Colore">${colors.map((c) => `<button type="button" data-ink="color" data-v="${c}" aria-pressed="${c === cur}" style="--sw:${shownColor(c, ink.dark)}" title="Colore"></button>`).join('')}</div>
       <div class="ink-group" aria-label="Spessore">${[0, 1, 2].map((i) => `<button type="button" data-ink="size" data-v="${i}" aria-pressed="${tool.size === i}" title="Spessore ${i + 1}"><i style="width:${[4, 7, 11][i]}px;height:${[4, 7, 11][i]}px"></i></button>`).join('')}</div>
       <div class="ink-group">
         <button type="button" data-ink="undo" title="Annulla (Ctrl+Z)" ${undo.length ? '' : 'disabled'}><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
         <button type="button" data-ink="redo" title="Ripeti" ${redo.length ? '' : 'disabled'}><svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
       </div>
       <div class="ink-group">
-        <select data-ink="paper" aria-label="Tipo di carta">${[['lined', 'Righe'], ['grid', 'Quadretti'], ['dots', 'Puntini'], ['blank', 'Bianca']].map(([k, l]) => `<option value="${k}" ${ink.paper === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <select data-ink="paper" aria-label="Tipo di carta">${[['lined', 'Righe'], ['grid', 'Quadretti'], ['dots', 'Puntini'], ['blank', 'Senza righe']].map(([k, l]) => `<option value="${k}" ${ink.paper === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <select data-ink="bg" aria-label="Colore del foglio">${[['light', 'Foglio bianco'], ['dark', 'Foglio nero']].map(([k, l]) => `<option value="${k}" ${(ink.dark ? 'dark' : 'light') === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
         <button type="button" data-ink="finger" title="Cosa fa il dito sullo schermo" aria-pressed="${fingerMode !== 'scroll'}">${fingerMode === 'scroll' ? 'Dito: scorre' : 'Dito: scrive'}</button>
       </div>`;
   }
@@ -346,6 +366,11 @@ export function mountEditor(root, note, { onChange }) {
   });
   bar.addEventListener('change', (ev) => {
     if (ev.target.dataset.ink === 'paper') { ink.paper = ev.target.value; pages.forEach((_, i) => redrawPage(i)); changed(); }
+    if (ev.target.dataset.ink === 'bg') {
+      if (ev.target.value === 'dark') ink.dark = true; else delete ink.dark;
+      pages.forEach((pg, i) => { pg.wrap.classList.toggle('dark', !!ink.dark); redrawPage(i); });
+      changed();
+    }
   });
   const onKey = (ev) => {
     if (!(ev.ctrlKey || ev.metaKey) || ev.target.matches('input, textarea')) return;

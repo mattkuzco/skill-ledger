@@ -9,7 +9,7 @@ import * as topicView from './views/topic.js';
 import * as study from './views/study.js';
 import * as logView from './views/log.js';
 import * as settings from './views/settings.js';
-import { hydrate } from './attachments.js';
+import { hydrate, openLinkModal, findUrl } from './attachments.js';
 
 let current = parse();
 let pending = false;
@@ -127,6 +127,18 @@ onLeave(async (prev) => {
   if (prev.parts[0] === 'board') await topicView.leaveBoard();
 });
 
+// "Condividi → Skill Ledger" from Chrome or another Android app opens ./?share_url=…&share_text=…
+function handleShare() {
+  const q = new URLSearchParams(location.search);
+  if (!q.has('share_url') && !q.has('share_text') && !q.has('share_title')) return;
+  const text = q.get('share_text') || '';
+  const url = q.get('share_url') || findUrl(text);
+  const title = (q.get('share_title') || text.replace(url, '')).trim().slice(0, 200);
+  history.replaceState(null, '', location.pathname + location.hash);
+  if (!url) { import('./util.js').then((u) => u.toast('Nel contenuto condiviso non c\'è un link', 'bad')); return; }
+  openLinkModal({ url, title, pickTopic: true });
+}
+
 async function boot() {
   try {
     await store.init();
@@ -143,6 +155,7 @@ async function boot() {
     if (current.parts[0] === 'settings') safeRender('sync');
   });
   render();
+  handleShare();
   sync.startAutoSync();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     // When a new version takes over, reload once so the new files are used right away.

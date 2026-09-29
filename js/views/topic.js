@@ -4,7 +4,7 @@ import { newCardSrs, isCardDue, TOPIC_LADDER, describe } from '../srs.js';
 import { renderMarkdown, excerpt } from '../md.js';
 import {
   registerActions, openModal, closeModal, modalError, areaChip, confDots, notesOf, cardsOf, questionsOf,
-  emptyState, confirmButton,
+  emptyState, confirmButton, isModalOpen,
 } from '../ui.js';
 import { openTopicModal } from './areas.js';
 import { navigate } from '../router.js';
@@ -68,7 +68,7 @@ function boardCard(t) {
     ? [n ? plural(n, 'tratto', 'tratti') : '', imgs ? plural(imgs, 'foto', 'foto') : '', last ? 'modificato ' + fmtDate(new Date(last).toISOString().slice(0, 10)) : ''].filter(Boolean).join(' · ')
     : 'Un foglio senza bordi per scrivere a mano con la penna, come in OneNote. Scorri con un dito, ingrandisci con due.';
   return `<a class="board-card" href="#/board/${t.id}">
-    <span class="board-thumb">${thumb ? `<img src="${thumb}" alt="Anteprima del quaderno">` : '<span class="board-empty"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l1-4L16 5l3 3L8 19z"/><path d="M14 7l3 3"/></svg>Foglio vuoto</span>'}</span>
+    <span class="board-thumb${board.isDark(t.id) ? ' dark' : ''}">${thumb ? `<img src="${thumb}" alt="Anteprima del quaderno">` : '<span class="board-empty"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l1-4L16 5l3 3L8 19z"/><path d="M14 7l3 3"/></svg>Foglio vuoto</span>'}</span>
     <span class="board-card-body">
       <span class="label">Quaderno</span>
       <b class="board-card-title">${n || imgs ? 'I tuoi appunti a mano' : 'Inizia a scrivere a mano'}</b>
@@ -554,12 +554,24 @@ registerActions({
     if (k) toast(plural(k, 'allegato aggiunto', 'allegati aggiunti'));
   },
   'rec-open': (el) => att.openRecorder(el.dataset.topic),
+  'link-new': (el) => att.openLinkModal({ topicId: el.dataset.topic }),
+  'link-edit': (el) => att.openLinkModal({ id: el.dataset.id }),
+  'link-save': async (form) => {
+    const fd = new FormData(form);
+    const topicId = String(fd.get('topicId') || form.dataset.topic || '');
+    const r = await att.saveLink({ id: form.dataset.id, topicId, url: fd.get('url'), title: fd.get('title'), desc: fd.get('desc') });
+    if (r.error) { modalError(r.error); return; }
+    closeModal();
+    const here = location.hash.startsWith(`#/topic/${topicId}`);
+    toast(form.dataset.id ? 'Link aggiornato' : here ? 'Link aggiunto agli Allegati' : `Link salvato in "${store.get(topicId)?.title || 'argomento'}"`);
+    if (!form.dataset.id && here && !location.hash.includes('tab=files')) navigate(`#/topic/${topicId}?tab=files`);
+  },
   'att-open': (el) => { if (el.dataset.id) att.openViewer(el.dataset.id); },
   'att-delete': async (el) => {
     const a = store.get(el.dataset.id);
     await att.removeAttachment(el.dataset.id);
     closeModal();
-    toast('Allegato eliminato');
+    toast(att.kindOf(a?.mime) === 'link' ? 'Link eliminato' : 'Allegato eliminato');
     if (a?.noteId) refreshAttachments(a.noteId);
   },
   'ai-transcribe-photos': (el) => transcribePhotos(el, att.topicAttachments(el.dataset.topic).filter((a) => a.mime.startsWith('image/'))),
@@ -687,13 +699,38 @@ registerActions({
 
 export { TOPIC_LADDER };
 
-// Drag files onto the Allegati tab.
-document.addEventListener('dragover', (e) => { if (e.target.closest?.('[data-drop-topic]') && [...e.dataTransfer.types].includes('Files')) { e.preventDefault(); e.target.closest('[data-drop-topic]').classList.add('dragging'); } });
+// Drag files (or a link from another browser tab) onto the Allegati tab.
+const dropsSomething = (dt) => { const t = [...dt.types]; return t.includes('Files') || t.includes('text/uri-list'); };
+document.addEventListener('dragover', (e) => { if (e.target.closest?.('[data-drop-topic]') && dropsSomething(e.dataTransfer)) { e.preventDefault(); e.target.closest('[data-drop-topic]').classList.add('dragging'); } });
 document.addEventListener('dragleave', (e) => { const z = e.target.closest?.('[data-drop-topic]'); if (z && !z.contains(e.relatedTarget)) z.classList.remove('dragging'); });
 document.addEventListener('drop', async (e) => {
   const z = e.target.closest?.('[data-drop-topic]');
-  if (!z || !e.dataTransfer.files.length) return;
+  if (!z) return;
+  if (!e.dataTransfer.files.length) {
+    const url = att.findUrl(e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain'));
+    if (!url) return;
+    e.preventDefault(); z.classList.remove('dragging');
+    att.openLinkModal({ topicId: z.dataset.dropTopic, url });
+    return;
+  }
   e.preventDefault(); z.classList.remove('dragging');
   const k = await att.addFiles({ topicId: z.dataset.dropTopic }, [...e.dataTransfer.files]);
   if (k) toast(plural(k, 'allegato aggiunto', 'allegati aggiunti'));
+});
+
+// Paste a web address (Ctrl+V / long press → Incolla) while the Allegati tab is open: save it as a link.
+document.addEventListener('paste', (e) => {
+  const z = document.querySelector('[data-drop-topic]');
+  if (!z || isModalOpen() || e.target.closest?.('input, textarea, [contenteditable]')) return;
+  const files = [...(e.clipboardData?.files || [])];
+  if (files.length) {
+    e.preventDefault();
+    att.addFiles({ topicId: z.dataset.dropTopic }, files).then((k) => { if (k) toast(plural(k, 'allegato aggiunto', 'allegati aggiunti')); });
+    return;
+  }
+  const text = (e.clipboardData?.getData('text/plain') || '').trim();
+  const url = att.findUrl(text) || (!/\s/.test(text) && /\.[a-z]{2,}(\/|$)/i.test(text) ? text : '');
+  if (!url) return;
+  e.preventDefault();
+  att.openLinkModal({ topicId: z.dataset.dropTopic, url });
 });

@@ -23,7 +23,8 @@ export function openModal(html, { wide = false, onMount, onClose } = {}) {
   modalOpen = true;
   onModalClose = onClose || null;
   const first = root.querySelector('[autofocus], input:not([type=hidden]), textarea, select');
-  if (first) setTimeout(() => first.focus(), 20);
+  // don't steal focus from a field the user already tapped
+  if (first) setTimeout(() => { if (!root.contains(document.activeElement)) first.focus(); }, 20);
   if (onMount) onMount(root.querySelector('.panel'));
 }
 export function closeModal() {
