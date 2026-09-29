@@ -1,6 +1,6 @@
 import * as store from '../store.js';
 import { esc, today, relDue, plural, toast, debounce, stageLabel, stageVar, fmtDate } from '../util.js';
-import { newCardSrs, isCardDue, TOPIC_LADDER } from '../srs.js';
+import { newCardSrs, isCardDue, TOPIC_LADDER, describe } from '../srs.js';
 import { renderMarkdown, excerpt } from '../md.js';
 import {
   registerActions, openModal, closeModal, modalError, areaChip, confDots, notesOf, cardsOf, questionsOf,
@@ -336,7 +336,7 @@ function openCardModal(c, topicId) {
       <h2>${isNew ? 'Nuova flashcard' : 'Modifica flashcard'}</h2>
       <div class="field"><label for="c-front">Fronte (domanda)</label><textarea id="c-front" name="front" rows="3" required>${esc(c.front)}</textarea></div>
       <div class="field"><label for="c-back">Retro (risposta)</label><textarea id="c-back" name="back" rows="4" required>${esc(c.back)}</textarea></div>
-      ${!isNew && c.srs ? `<p class="hint mono">Prossimo ripasso ${relDue(c.srs.due)} · intervallo ${c.srs.interval} g · facilità ${c.srs.ease}</p>` : ''}
+      ${(() => { const m = !isNew && describe(c.srs); return m ? `<div class="fsrs-info"><span>Prossimo ripasso <b>${relDue(m.due)}</b></span><span>Ricordo oggi <b>${Math.round(m.recall * 100)}%</b></span><span>Stabilità <b>${m.stability < 1 ? '<1' : Math.round(m.stability)} g</b></span><span>Difficoltà <b>${m.difficulty.toFixed(1).replace('.', ',')}/10</b></span><span>Ripassi <b>${m.reps}</b> · errori <b>${m.lapses}</b></span></div>` : (!isNew ? '<p class="hint">Carta nuova: non l\'hai ancora ripassata.</p>' : ''); })()}
       <p class="error" data-error hidden></p>
       <div class="modal-foot">
         ${isNew ? '<label class="check"><input type="checkbox" name="another" checked> Aggiungine un\'altra</label>' : confirmButton('Elimina', 'card-delete', `data-id="${c.id}"`)}
