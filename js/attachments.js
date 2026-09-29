@@ -12,6 +12,16 @@ import { openModal, closeModal, isModalOpen } from './ui.js';
 const MAX_SIDE = 2200;              // photos are resized to this long side
 const MAX_BYTES = 50 * 1024 * 1024; // Supabase free plan: 50 MB per file
 
+// Some Android pickers hand over files without a type (e.g. .m4a from the system recorder):
+// fall back to the file extension.
+const EXT_TYPES = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', heic: 'image/heic', heif: 'image/heif',
+  mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', mkv: 'video/x-matroska', '3gp': 'video/3gpp',
+  m4a: 'audio/mp4', aac: 'audio/aac', mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg', flac: 'audio/flac', amr: 'audio/amr', weba: 'audio/webm',
+  pdf: 'application/pdf',
+};
+export const typeOf = (file) => file.type || EXT_TYPES[(file.name || '').split('.').pop().toLowerCase()] || '';
+
 export const kindOf = (mime = '') => (mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : mime.startsWith('audio/') ? 'audio' : mime === 'application/pdf' ? 'pdf' : 'other');
 const byDate = (a, b) => (b.created || '').localeCompare(a.created || '') || b.updated_at - a.updated_at;
 
@@ -89,12 +99,19 @@ export async function addFiles(target, files) {
   let n = 0;
   for (const file of files) {
     try {
-      const kind = kindOf(file.type);
+      let mime = typeOf(file);
+      const kind = kindOf(mime);
       if (kind === 'other') { toast(`${file.name}: formato non supportato`, 'bad'); continue; }
-      let blob = file; let info = {}; let mime = file.type;
-      if (kind === 'image') { const r = await compressImage(file); blob = r.blob; info = { w: r.w, h: r.h }; mime = 'image/jpeg'; }
+      let blob = file.type ? file : new Blob([file], { type: mime }); let info = {};
+      if (kind === 'image') {
+        try { const r = await compressImage(file); blob = r.blob; info = { w: r.w, h: r.h }; mime = 'image/jpeg'; }
+        catch { toast(`${file.name}: questa foto non si può aprire (formato HEIC?). Salvala come JPG e riprova.`, 'bad'); continue; }
+      }
       if (blob.size > MAX_BYTES) { toast(`${file.name}: troppo grande (${fmtSize(blob.size)}, massimo 50 MB)`, 'bad'); continue; }
-      if (kind === 'video' || kind === 'audio') info = await probeMedia(blob, kind);
+      if (kind === 'video' || kind === 'audio') {
+        info = await probeMedia(blob, kind);
+        if (!info.duration && !info.w) toast(`${file.name}: salvato, ma Chrome potrebbe non riuscire a riprodurlo su questo dispositivo`);
+      }
       const id = uid();
       await store.putBlob(id, blob);
       await store.put('attachment', {
