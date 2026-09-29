@@ -2,7 +2,8 @@
 
 import * as store from './store.js';
 import { esc, colorVar, STAGES, today, weekStart } from './util.js';
-import { isCardDue, isTopicDue } from './srs.js';
+import { isCardDue, isTopicDue, stateOf, recallNow } from './srs.js';
+import { presetForTopic, presetForScope, areaPresetId, getPreset } from './presets.js';
 
 /* ---------- action registry ---------- */
 const actions = {};
@@ -65,7 +66,78 @@ export function scopeLabel(scope) {
   if (!r) return 'Tutte le aree';
   return k === 'area' ? r.name : r.title;
 }
-export const dueCards = (scope) => store.all('card').filter((c) => isCardDue(c) && inScope(c, scope));
+/* ---------- study queue (like Anki: per-deck daily limits) ---------- */
+// Extra new cards allowed today for a scope ("Studia altre nuove oggi"), on this device.
+export function extraNewToday(scope) {
+  const m = store.getMeta('extraNew', null);
+  return m && m.day === today() ? m.scopes?.[scope] || 0 : 0;
+}
+export async function addExtraNew(scope, n) {
+  let m = store.getMeta('extraNew', null);
+  if (!m || m.day !== today()) m = { day: today(), scopes: {} };
+  m.scopes[scope] = (m.scopes[scope] || 0) + n;
+  await store.setMeta('extraNew', m);
+}
+const hash = (s) => { let x = 2166136261; for (let i = 0; i < s.length; i++) x = Math.imul(x ^ s.charCodeAt(i), 16777619); return x >>> 0; };
+// Random but stable for the day, so counts on the home page match the session.
+const dayShuffle = (list, day) => list.sort((a, b) => hash(a.id + day) - hash(b.id + day));
+const byCreated = (a, b) => (a.created || '').localeCompare(b.created || '') || a.updated_at - b.updated_at;
+
+// Cards to study now in a scope: learning cards (no limit), then reviews and new cards within
+// each topic's daily limits. For an area (or everything), the area's own limits cap the total,
+// like a parent deck in Anki. Topic = deck, area = parent deck.
+export function studyQueue(scope, { now = Date.now() } = {}) {
+  const day = today();
+  const all = store.all('card');
+  const extra = extraNewToday(scope);
+  const topicScope = String(scope).startsWith('topic:');
+  const areaOf = new Map();
+  const aid = (tid) => { if (!areaOf.has(tid)) areaOf.set(tid, store.get(tid)?.areaId || ''); return areaOf.get(tid); };
+  const doneN = new Map(); const doneR = new Map(); const aDoneN = new Map(); const aDoneR = new Map();
+  const bump = (m, k) => m.set(k, (m.get(k) || 0) + 1);
+  for (const c of all) {
+    if (c.srs?.firstDay === day) { bump(doneN, c.topicId); bump(aDoneN, aid(c.topicId)); }
+    if (c.srs?.revDay === day) { bump(doneR, c.topicId); bump(aDoneR, aid(c.topicId)); }
+  }
+  const caps = new Map();
+  const areaCap = (areaId) => {
+    if (!caps.has(areaId)) {
+      const p = getPreset(areaPresetId(areaId)).cards;
+      caps.set(areaId, { n: Math.max(0, p.newPerDay + extra - (aDoneN.get(areaId) || 0)), r: Math.max(0, p.reviewsPerDay - (aDoneR.get(areaId) || 0)) });
+    }
+    return caps.get(areaId);
+  };
+  const byTopic = new Map();
+  for (const c of all) {
+    if (!inScope(c, scope) || !isCardDue(c, now)) continue;
+    if (!byTopic.has(c.topicId)) byTopic.set(c.topicId, []);
+    byTopic.get(c.topicId).push(c);
+  }
+  const learn = []; let review = []; const fresh = []; let newHidden = 0; let revHidden = 0;
+  const topics = [...byTopic.keys()].sort((a, b) => (store.get(a)?.title || '').localeCompare(store.get(b)?.title || ''));
+  for (const tid of topics) {
+    const p = presetForTopic(tid).cards;
+    const cap = topicScope ? null : areaCap(aid(tid));
+    let nLeft = Math.max(0, p.newPerDay + extra - (doneN.get(tid) || 0));
+    let rLeft = Math.max(0, p.reviewsPerDay - (doneR.get(tid) || 0));
+    if (cap) { nLeft = Math.min(nLeft, cap.n); rLeft = Math.min(rLeft, cap.r); }
+    const L = []; const R = []; const N = [];
+    for (const c of byTopic.get(tid)) { const st = stateOf(c.srs); (st === 'new' ? N : st === 'review' ? R : L).push(c); }
+    learn.push(...L);
+    R.sort((a, b) => (a.srs?.due || '').localeCompare(b.srs?.due || '') || byCreated(a, b)); // most overdue first
+    const takeR = R.slice(0, rLeft); revHidden += R.length - takeR.length; review.push(...takeR);
+    if (p.newOrder === 'random') dayShuffle(N, day); else N.sort(byCreated);
+    const takeN = N.slice(0, nLeft); newHidden += N.length - takeN.length; fresh.push(...takeN);
+    if (cap) { cap.n -= takeN.length; cap.r -= takeR.length; }
+  }
+  const sp = presetForScope(scope).cards;
+  if (sp.reviewOrder === 'random') review = dayShuffle(review, day);
+  else if (sp.reviewOrder === 'difficulty') review.sort((a, b) => recallNow(a.srs) - recallNow(b.srs));
+  else review.sort((a, b) => (a.srs?.due || '').localeCompare(b.srs?.due || ''));
+  learn.sort((a, b) => (a.srs?.dueAt || 0) - (b.srs?.dueAt || 0));
+  return { learn, review, fresh, newHidden, revHidden, mix: sp.mix, count: learn.length + review.length + fresh.length };
+}
+export const dueCards = (scope) => { const q = studyQueue(scope); return [...q.learn, ...q.review, ...q.fresh]; };
 export const dueTopics = () => store.all('topic').filter(isTopicDue).sort((a, b) => a.nextReview.localeCompare(b.nextReview));
 
 export function minutesThisWeek() {

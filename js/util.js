@@ -1,5 +1,5 @@
 // Shown in Settings; keep in sync with VERSION in sw.js.
-export const APP_VERSION = '13';
+export const APP_VERSION = '14';
 
 // Small shared helpers. No dependencies.
 

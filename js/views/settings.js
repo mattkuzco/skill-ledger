@@ -1,9 +1,10 @@
 import * as store from '../store.js';
 import * as sync from '../sync.js';
 import * as ai from '../ai.js';
-import { esc, toast, APP_VERSION } from '../util.js';
+import { esc, toast, plural, APP_VERSION } from '../util.js';
 import { registerActions, confirmButton } from '../ui.js';
 import { loadSample } from '../seed.js';
+import { presets, usage, formatSteps, DEFAULT_ID } from '../presets.js';
 
 let installEvent = null;
 let editingProject = false;
@@ -21,7 +22,6 @@ export function render() {
   const [label, cls] = STATUS[st.status] || STATUS.off;
   const aic = ai.aiConfig();
   const theme = store.getMeta('theme', 'system');
-  const retention = +store.getMeta('retention', 0.9) || 0.9;
   const pending = store.dirtyRecords().length;
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
 
@@ -80,10 +80,11 @@ export function render() {
   </section>
 
   <section class="settings-block">
-    <div class="sec-head"><h2>Ripasso delle flashcard</h2><span class="sync-pill"><i></i>Algoritmo FSRS-5</span></div>
-    <p class="muted">Per ogni carta l'app stima quanto è probabile che te la ricordi e te la ripropone quando quella probabilità scende al livello che scegli qui. Più alto significa ricordare di più, ma con più ripassi al giorno.</p>
-    <div class="seg" role="radiogroup" aria-label="Memoria desiderata">${[[0.8, '80%'], [0.85, '85%'], [0.9, '90%'], [0.95, '95%']].map(([v, l]) => `<label><input type="radio" name="retention" value="${v}" data-change="retention" ${Math.abs(retention - v) < 0.001 ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div>
-    <p class="hint">90% è il valore consigliato. Con 95% i ripassi quasi raddoppiano; con 80% sono circa la metà, ma dimentichi di più. Vale per questo dispositivo.</p>
+    <div class="sec-head"><h2>Opzioni di studio</h2><span class="sync-pill"><i></i>Algoritmo FSRS-5</span></div>
+    <p class="muted">Come le opzioni dei mazzi di Anki: limiti giornalieri, passi di apprendimento, memoria desiderata, ordine delle carte e impostazioni dei quiz. Crea più preset e assegnali alle aree o ai singoli argomenti.</p>
+    <div class="list">${presets().map((p) => { const u = usage(p.id); const by = [u.areas.length ? plural(u.areas.length, 'area', 'aree') : '', u.topics.length ? plural(u.topics.length, 'argomento', 'argomenti') : ''].filter(Boolean).join(' e '); return `
+      <a class="list-row" href="#/options/${p.id}"><span class="grow"><b class="block">${esc(p.name)}</b><span class="meta"><span>${p.cards.newPerDay} nuove/giorno · passi ${esc(formatSteps(p.cards.learnSteps) || 'nessuno')} · memoria ${Math.round(p.cards.retention * 100)}%</span><span>${by ? 'usato da ' + by : p.isDefault ? 'per tutto il resto' : 'non usato'}</span></span></span><span aria-hidden="true">›</span></a>`; }).join('')}</div>
+    <div class="row gap"><button class="btn" data-action="preset-new" data-from="${DEFAULT_ID}" data-for="">+ Nuovo preset</button></div>
   </section>
 
   <section class="settings-block">
@@ -98,7 +99,7 @@ export function render() {
       <div class="seg" role="radiogroup" aria-label="Tema">${[['system', 'Sistema'], ['light', 'Chiaro'], ['dark', 'Scuro']].map(([k, l]) => `<label><input type="radio" name="theme" value="${k}" data-change="theme" ${k === theme ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div>
       ${standalone ? '<span class="sync-pill ok"><i></i>App installata</span>' : installEvent ? '<button class="btn primary" data-action="install">Installa app</button>' : ''}
     </div>
-    <p class="hint mono">Versione ${APP_VERSION} · FSRS, quaderno, allegati e link, appunti sui PDF, esportazione PDF del quaderno, importazione da Excel/CSV/JSON (PDF.js 6.3)</p>
+    <p class="hint mono">Versione ${APP_VERSION} · opzioni di studio stile Anki, FSRS, quaderno, allegati, PDF, importazione (PDF.js 6.3)</p>
     ${standalone ? '' : `<p class="hint">Per installarla: su Chrome/Edge usa il pulsante "Installa" nella barra degli indirizzi; su iPhone apri in Safari → Condividi → "Aggiungi alla schermata Home"; su Android menu ⋮ → "Installa app".</p>`}
   </section>`;
 }
@@ -161,7 +162,6 @@ registerActions({
   },
   'load-sample-settings': async () => { await loadSample(); toast('Esempi caricati'); },
   wipe: async () => { await store.wipe(); await store.setMeta('cursor', null); toast('Dati cancellati da questo dispositivo'); },
-  retention: async (el) => { await store.setMeta('retention', +el.value); toast(`Memoria desiderata: ${Math.round(el.value * 100)}%. Vale dai prossimi ripassi.`); },
   'ink-lowlat': async (el) => { await store.setMeta('inkLowLatency', el.checked); toast(el.checked ? 'Inchiostro a bassa latenza attivo' : 'Inchiostro a bassa latenza disattivato'); },
   theme: async (el) => { await store.setMeta('theme', el.value); applyTheme(); },
   install: async () => { if (!installEvent) return; installEvent.prompt(); await installEvent.userChoice; installEvent = null; rerender(); },

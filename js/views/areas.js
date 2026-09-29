@@ -7,6 +7,7 @@ import {
 } from '../ui.js';
 import { navigate } from '../router.js';
 import { removeAttachment } from '../attachments.js';
+import { presets, areaPresetId, topicPresetId, DEFAULT_ID } from '../presets.js';
 
 /* ---------- list ---------- */
 export function renderList(params) {
@@ -24,7 +25,7 @@ export function renderList(params) {
     const topics = topicsOf(a.id);
     const ids = new Set(topics.map((t) => t.id));
     const cards = store.all('card').filter((c) => ids.has(c.topicId));
-    const due = cards.filter(isCardDue).length;
+    const due = dueCards('area:' + a.id).length; // within the daily limits
     const notes = store.all('note').filter((n) => ids.has(n.topicId)).length;
     return `<a class="area-card" href="#/area/${a.id}" style="--area:${colorVar(a.color)}">
       <div class="area-card-head"><span class="swatch"></span><span class="status ${a.status || 'active'}">${statusLabel(a.status)}</span></div>
@@ -102,6 +103,7 @@ export function openAreaModal(a) {
         <div class="field"><label>Colore</label><div class="swatches">${COLORS.map((c) => `<label class="sw"><input type="radio" name="color" value="${c}" ${c === a.color ? 'checked' : ''}><span style="background:${colorVar(c)}"></span><span class="sr">${c}</span></label>`).join('')}</div></div>
         <div class="field"><label for="a-status">Stato</label><select id="a-status" name="status">${[['active', 'Attiva'], ['paused', 'In pausa'], ['done', 'Completata']].map(([k, l]) => `<option value="${k}" ${k === (a.status || 'active') ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
       </div>
+      <div class="field"><label for="a-preset">Opzioni di studio</label><select id="a-preset" name="presetId">${presets().map((p) => `<option value="${p.id}" ${p.id === areaPresetId(a.id) ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select><span class="hint">Limiti giornalieri, passi di apprendimento e quiz, come i mazzi di Anki. ${a.id ? `<a href="#/options/${areaPresetId(a.id)}?for=area:${a.id}" data-action="close-modal">Modifica le opzioni</a>` : ''}</span></div>
       <p class="error" data-error hidden></p>
       <div class="modal-foot">
         ${isNew ? '' : confirmButton('Elimina area', 'area-delete', `data-id="${a.id}"`)}
@@ -123,6 +125,7 @@ export function openTopicModal(t, areaId) {
         <div class="field"><label for="t-area">Area</label><select id="t-area" name="areaId">${areaOptions(t.areaId)}</select></div>
         <div class="field"><label for="t-stage">Fase</label><select id="t-stage" name="stage">${STAGES.map(([k, l]) => `<option value="${k}" ${k === t.stage ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
       </div>
+      <div class="field"><label for="t-preset">Opzioni di studio</label><select id="t-preset" name="presetId"><option value="">Come l'area</option>${presets().map((p) => `<option value="${p.id}" ${p.id === t.presetId && store.get(p.id) ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>${t.id ? `<span class="hint"><a href="#/options/${topicPresetId(t.id)}?for=topic:${t.id}" data-action="close-modal">Modifica le opzioni</a></span>` : ''}</div>
       <div class="field"><label for="t-res">Risorsa</label><input id="t-res" name="resource" type="text" value="${esc(t.resource || '')}" placeholder="Link, capitolo del libro, lezione…"></div>
       <div class="row2">
         <div class="field"><label>Sicurezza</label><div class="seg">${[1, 2, 3, 4, 5].map((i) => `<label><input type="radio" name="confidence" value="${i}" ${i === (+t.confidence || 1) ? 'checked' : ''}><span>${i}</span></label>`).join('')}</div><span class="hint">1 = appena sentito · 5 = saprei spiegarlo</span></div>
@@ -159,7 +162,7 @@ registerActions({
     const prev = id ? store.get(id) : null;
     const rec = await store.put('area', {
       ...(prev || {}), id: id || undefined, name, goal: String(fd.get('goal') || '').trim(),
-      color: fd.get('color') || 'cobalt', status: fd.get('status') || 'active',
+      color: fd.get('color') || 'cobalt', status: fd.get('status') || 'active', presetId: fd.get('presetId') === DEFAULT_ID ? '' : fd.get('presetId') || '',
       order: prev?.order ?? areas().reduce((m, x) => Math.max(m, x.order || 0), 0) + 1,
       created: prev?.created || today(),
     });
@@ -189,7 +192,7 @@ registerActions({
     const rec = await store.put('topic', {
       ...(prev || {}), id: id || undefined, title, areaId: fd.get('areaId'), stage,
       resource: String(fd.get('resource') || '').trim(), confidence: +fd.get('confidence') || 1,
-      nextReview, reviewStep: prev?.reviewStep || 0, created: prev?.created || today(),
+      nextReview, reviewStep: prev?.reviewStep || 0, created: prev?.created || today(), presetId: String(fd.get('presetId') || ''),
     });
     // Keep denormalised areaId on cards/questions in sync if the topic moved.
     if (prev && prev.areaId !== rec.areaId) {

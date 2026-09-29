@@ -9,6 +9,7 @@ import * as topicView from './views/topic.js';
 import * as study from './views/study.js';
 import * as logView from './views/log.js';
 import * as settings from './views/settings.js';
+import * as optionsView from './views/options.js';
 import { hydrate, openLinkModal, findUrl } from './attachments.js';
 
 let current = parse();
@@ -29,6 +30,7 @@ function route(r) {
       if (b === 'quiz') return { nav: 'study', title: 'Quiz', html: () => study.renderQuiz(r.params), focus: true, session: 'quiz' };
       return { nav: 'study', title: 'Studia', html: () => study.renderHub(r.params) };
     case 'log': return { nav: 'log', title: 'Registro', html: () => logView.render() };
+    case 'options': return { nav: 'settings', title: 'Opzioni di studio', html: () => optionsView.render(b, r.params) };
     case 'settings': return { nav: 'settings', title: 'Impostazioni', html: () => settings.render() };
     default: return { nav: 'home', title: 'Oggi', html: () => home.render() };
   }

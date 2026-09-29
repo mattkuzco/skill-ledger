@@ -1,10 +1,11 @@
 import * as store from '../store.js';
 import { esc, today, relDue, plural, toast, debounce, stageLabel, stageVar, fmtDate } from '../util.js';
-import { newCardSrs, isCardDue, TOPIC_LADDER, describe } from '../srs.js';
+import { newCardSrs, isCardDue, TOPIC_LADDER, describe, stateOf } from '../srs.js';
+import { topicPresetId } from '../presets.js';
 import { renderMarkdown, excerpt } from '../md.js';
 import {
   registerActions, openModal, closeModal, modalError, areaChip, confDots, notesOf, cardsOf, questionsOf,
-  emptyState, confirmButton, isModalOpen,
+  emptyState, confirmButton, isModalOpen, dueCards,
 } from '../ui.js';
 import { openTopicModal } from './areas.js';
 import { navigate } from '../router.js';
@@ -25,7 +26,7 @@ export function renderTopic(id, params) {
   const notes = notesOf(id);
   const cards = cardsOf(id);
   const qs = questionsOf(id);
-  const due = cards.filter(isCardDue).length;
+  const due = dueCards('topic:' + id).length; // within today's limits
   const resIsUrl = /^https?:\/\//.test(t.resource || '');
 
   const counts = { notes: notes.length, files: att.topicAttachments(id).length, cards: cards.length, quiz: qs.length };
@@ -118,15 +119,26 @@ function notesTab(t, notes) {
   </section>`;
 }
 
+const optionsBtn = (t) => `<a class="btn ghost" href="#/options/${topicPresetId(t.id)}?for=topic:${t.id}" title="Opzioni di studio: limiti, passi, quiz">⚙ Opzioni</a>`;
+function cardStatus(c) {
+  if (c.suspended) return '<span class="small badge off">sospesa</span>';
+  const st = stateOf(c.srs);
+  const leech = c.leech ? '<span class="small badge leech">sanguisuga</span>' : '';
+  if (c.buriedUntil && c.buriedUntil > today()) return `${leech}<span class="small mono muted">domani</span>`;
+  if (st === 'new') return `${leech}<span class="small badge new">nuova</span>`;
+  if (st !== 'review') return `${leech}<span class="small badge learn">in apprendimento</span>`;
+  return `${leech}<span class="small mono ${isCardDue(c) ? 'warn' : 'muted'}">${isCardDue(c) ? 'da ripassare' : relDue(c.srs.due)}</span>`;
+}
 function cardsTab(t, cards) {
-  const sorted = cards.slice().sort((a, b) => (a.srs?.due || '').localeCompare(b.srs?.due || ''));
+  const rank = (c) => (c.suspended ? 3 : stateOf(c.srs) === 'new' ? 2 : 1);
+  const sorted = cards.slice().sort((a, b) => rank(a) - rank(b) || (a.srs?.due || '').localeCompare(b.srs?.due || '') || (a.created || '').localeCompare(b.created || ''));
   return `<section>
-    <div class="sec-head"><h2>Flashcard</h2><div class="btn-group"><button class="btn" data-action="import-open" data-topic="${t.id}" data-mode="cards">⤒ Importa</button><button class="btn" data-action="ai-open" data-topic="${t.id}" data-mode="cards">✦ Genera con AI</button><button class="btn primary" data-action="card-new" data-topic="${t.id}">+ Flashcard</button></div></div>
+    <div class="sec-head"><h2>Flashcard</h2><div class="btn-group">${optionsBtn(t)}<button class="btn" data-action="import-open" data-topic="${t.id}" data-mode="cards">⤒ Importa</button><button class="btn" data-action="ai-open" data-topic="${t.id}" data-mode="cards">✦ Genera con AI</button><button class="btn primary" data-action="card-new" data-topic="${t.id}">+ Flashcard</button></div></div>
     ${sorted.length ? `<div class="list">${sorted.map((c) => `
       <button class="list-row fc-row" data-action="card-edit" data-id="${c.id}">
         <span class="fc-front">${esc(c.front)}</span>
         <span class="fc-back muted">${esc(c.back)}</span>
-        <span class="small mono ${isCardDue(c) ? 'warn' : 'muted'}">${isCardDue(c) ? 'da ripassare' : relDue(c.srs.due)}</span>
+        <span class="fc-status">${cardStatus(c)}</span>
       </button>`).join('')}</div>`
       : emptyState('Nessuna flashcard', 'Una flashcard è una domanda su un lato e la risposta sull\'altro. Scrivila tu, generala dalle tue note o importala da Excel, CSV o JSON.', `<button class="btn primary" data-action="card-new" data-topic="${t.id}">+ Flashcard</button><button class="btn" data-action="ai-open" data-topic="${t.id}" data-mode="cards">✦ Genera con AI</button><button class="btn" data-action="import-open" data-topic="${t.id}" data-mode="cards">⤒ Importa</button>`)}
   </section>`;
@@ -135,7 +147,7 @@ function cardsTab(t, cards) {
 function quizTab(t, qs) {
   const attempts = store.all('attempt').filter((a) => a.scope === 'topic:' + t.id).sort((a, b) => b.updated_at - a.updated_at).slice(0, 3);
   return `<section>
-    <div class="sec-head"><h2>Domande del quiz</h2><div class="btn-group"><button class="btn" data-action="import-open" data-topic="${t.id}" data-mode="quiz">⤒ Importa</button><button class="btn" data-action="ai-open" data-topic="${t.id}" data-mode="quiz">✦ Genera con AI</button><button class="btn primary" data-action="question-new" data-topic="${t.id}">+ Domanda</button></div></div>
+    <div class="sec-head"><h2>Domande del quiz</h2><div class="btn-group">${optionsBtn(t)}<button class="btn" data-action="import-open" data-topic="${t.id}" data-mode="quiz">⤒ Importa</button><button class="btn" data-action="ai-open" data-topic="${t.id}" data-mode="quiz">✦ Genera con AI</button><button class="btn primary" data-action="question-new" data-topic="${t.id}">+ Domanda</button></div></div>
     ${attempts.length ? `<p class="muted small">Ultimi risultati: ${attempts.map((a) => `<b class="mono">${a.score}/${a.total}</b> (${fmtDate(a.date)})`).join(' · ')}</p>` : ''}
     ${qs.length ? `<div class="list">${qs.map((q, i) => `
       <button class="list-row q-row" data-action="question-edit" data-id="${q.id}">
@@ -337,10 +349,12 @@ function openCardModal(c, topicId) {
       <h2>${isNew ? 'Nuova flashcard' : 'Modifica flashcard'}</h2>
       <div class="field"><label for="c-front">Fronte (domanda)</label><textarea id="c-front" name="front" rows="3" required>${esc(c.front)}</textarea></div>
       <div class="field"><label for="c-back">Retro (risposta)</label><textarea id="c-back" name="back" rows="4" required>${esc(c.back)}</textarea></div>
-      ${(() => { const m = !isNew && describe(c.srs); return m ? `<div class="fsrs-info"><span>Prossimo ripasso <b>${relDue(m.due)}</b></span><span>Ricordo oggi <b>${Math.round(m.recall * 100)}%</b></span><span>Stabilità <b>${m.stability < 1 ? '<1' : Math.round(m.stability)} g</b></span><span>Difficoltà <b>${m.difficulty.toFixed(1).replace('.', ',')}/10</b></span><span>Ripassi <b>${m.reps}</b> · errori <b>${m.lapses}</b></span></div>` : (!isNew ? '<p class="hint">Carta nuova: non l\'hai ancora ripassata.</p>' : ''); })()}
+      ${!isNew && (c.suspended || c.leech) ? `<p class="card-flags">${c.suspended ? '<span class="badge off">Sospesa</span> Non viene proposta nei ripassi finché non la riattivi.' : ''}${c.leech ? ' <span class="badge leech">Sanguisuga</span> L\'hai dimenticata spesso: prova a riscriverla in modo più semplice.' : ''}</p>` : ''}
+      ${(() => { const m = !isNew && describe(c.srs); return m && m.state !== 'review' && m.state !== 'new' ? `<p class="hint">In apprendimento: torna ${m.dueAt > Date.now() ? `tra ${Math.max(1, Math.round((m.dueAt - Date.now()) / 60000))} min` : 'adesso'}.</p>` : ''; })()}
+      ${(() => { const m = !isNew && describe(c.srs); return m ? `<div class="fsrs-info"><span>Prossimo ripasso <b>${m.state === 'review' ? relDue(m.due) : 'oggi'}</b></span><span>Ricordo oggi <b>${Math.round(m.recall * 100)}%</b></span><span>Stabilità <b>${m.stability < 1 ? '<1' : Math.round(m.stability)} g</b></span><span>Difficoltà <b>${m.difficulty.toFixed(1).replace('.', ',')}/10</b></span><span>Ripassi <b>${m.reps}</b> · errori <b>${m.lapses}</b></span></div>` : (!isNew ? '<p class="hint">Carta nuova: non l\'hai ancora ripassata.</p>' : ''); })()}
       <p class="error" data-error hidden></p>
       <div class="modal-foot">
-        ${isNew ? '<label class="check"><input type="checkbox" name="another" checked> Aggiungine un\'altra</label>' : confirmButton('Elimina', 'card-delete', `data-id="${c.id}"`)}
+        ${isNew ? '<label class="check"><input type="checkbox" name="another" checked> Aggiungine un\'altra</label>' : `<span class="row gap wrap">${confirmButton('Elimina', 'card-delete', `data-id="${c.id}"`)}<button type="button" class="btn" data-action="card-suspend-toggle" data-id="${c.id}">${c.suspended ? 'Riattiva' : 'Sospendi'}</button>${stateOf(c.srs) !== 'new' ? confirmButton('Reimposta come nuova', 'card-forget', `data-id="${c.id}"`) : ''}</span>`}
         <div class="row gap push"><button type="button" class="btn" data-action="close-modal">Chiudi</button><button class="btn primary" type="submit">${isNew ? 'Aggiungi' : 'Salva'}</button></div>
       </div>
     </form>`);
@@ -837,6 +851,16 @@ registerActions({
     } else { closeModal(); toast(id ? 'Flashcard salvata' : 'Flashcard aggiunta'); }
   },
   'card-delete': async (el) => { await store.remove(el.dataset.id); closeModal(); toast('Flashcard eliminata'); },
+  'card-suspend-toggle': async (el) => {
+    const c = store.get(el.dataset.id); if (!c) return;
+    await store.put('card', { ...c, suspended: !c.suspended, ...(c.suspended ? { leech: false } : {}) });
+    closeModal(); toast(c.suspended ? 'Carta riattivata' : 'Carta sospesa');
+  },
+  'card-forget': async (el) => {
+    const c = store.get(el.dataset.id); if (!c) return;
+    await store.put('card', { ...c, srs: newCardSrs(), leech: false, suspended: false, buriedUntil: '' });
+    closeModal(); toast('Carta reimpostata come nuova');
+  },
   'question-new': (el) => openQuestionModal(null, el.dataset.topic),
   'question-edit': (el) => openQuestionModal(store.get(el.dataset.id)),
   'question-save': async (form) => {
