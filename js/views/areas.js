@@ -2,7 +2,7 @@ import * as store from '../store.js';
 import { esc, colorVar, COLORS, STAGES, today, addDays, relDue, plural, toast } from '../util.js';
 import { isCardDue } from '../srs.js';
 import {
-  registerActions, openModal, closeModal, modalError, areas, topicsOf, stageBar, confDots,
+  registerActions, runAction, openModal, closeModal, modalError, areas, topicsOf, stageBar, confDots,
   emptyState, confirmButton, areaOptions, dueCards,
 } from '../ui.js';
 import { navigate } from '../router.js';
@@ -81,7 +81,7 @@ export function renderDetail(id) {
             return `<div class="card-wrap"><a class="card-item" href="#/topic/${t.id}">
               <span class="title">${esc(t.title)}</span>
               <span class="foot">${confDots(t.confidence)}<span class="mono small" title="${nn} note, ${nc} flashcard">${nn} note · ${nc} carte</span>${t.stage !== 'queued' && t.nextReview ? `<span class="small ${t.nextReview <= today() ? 'warn' : ''}">${relDue(t.nextReview)}</span>` : ''}</span>
-            </a><a class="card-pen" href="#/board/${t.id}" title="Apri il quaderno" aria-label="Apri il quaderno di ${esc(t.title)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l1-4L16 5l3 3L8 19z"/><path d="M14 7l3 3"/></svg></a>${i < 3 ? `<button class="adv" data-action="topic-advance" data-id="${t.id}" title="Sposta in ${STAGES[i + 1][1]}" aria-label="Sposta in ${STAGES[i + 1][1]}">→</button>` : ''}</div>`;
+            </a><a class="card-pen" href="#/board/${t.id}" title="Apri il quaderno" aria-label="Apri il quaderno di ${esc(t.title)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l1-4L16 5l3 3L8 19z"/><path d="M14 7l3 3"/></svg></a><span class="adv-group">${i > 0 ? `<button class="adv" data-action="topic-move" data-id="${t.id}" data-dir="-1" title="Riporta in ${STAGES[i - 1][1]}" aria-label="Riporta in ${STAGES[i - 1][1]}">←</button>` : ''}${i < 3 ? `<button class="adv" data-action="topic-move" data-id="${t.id}" data-dir="1" title="Sposta in ${STAGES[i + 1][1]}" aria-label="Sposta in ${STAGES[i + 1][1]}">→</button>` : ''}</span></div>`;
           }).join('')}
           ${k === 'queued' ? `<button class="add-card" data-action="topic-new" data-area="${id}">+ Aggiungi argomento</button>` : ''}
         </div>`;
@@ -137,6 +137,17 @@ export function openTopicModal(t, areaId) {
         <div class="row gap push"><button type="button" class="btn" data-action="close-modal">Annulla</button><button class="btn primary" type="submit">${isNew ? 'Crea argomento' : 'Salva'}</button></div>
       </div>
     </form>`);
+}
+
+// Change a topic's stage in either direction. Leaving "In coda" starts the review ladder;
+// going back to "In coda" keeps its review history but stops the reminders (queued topics are never due).
+export async function setTopicStage(t, stage) {
+  const patch = { stage };
+  if (t.stage === 'queued' && stage !== 'queued' && !t.nextReview) { patch.nextReview = addDays(today(), 1); patch.reviewStep = 0; }
+  await store.put('topic', { ...t, ...patch });
+  const label = STAGES.find((s) => s[0] === stage)?.[1] || stage;
+  const back = STAGES.findIndex((s) => s[0] === stage) < STAGES.findIndex((s) => s[0] === t.stage);
+  toast(`${back ? 'Riportato' : 'Spostato'} in "${label}"`);
 }
 
 // Delete a topic and everything that hangs off it.
@@ -210,13 +221,14 @@ registerActions({
     navigate(t ? `#/area/${t.areaId}` : '#/areas');
     toast('Argomento eliminato');
   },
-  'topic-advance': async (el) => {
+  // one column forward or back on the board
+  'topic-move': async (el) => {
     const t = store.get(el.dataset.id);
-    const i = STAGES.findIndex((s) => s[0] === t.stage);
-    if (i < 0 || i >= 3) return;
-    const patch = { stage: STAGES[i + 1][0] };
-    if (t.stage === 'queued' && !t.nextReview) { patch.nextReview = addDays(today(), 1); patch.reviewStep = 0; }
-    await store.put('topic', { ...t, ...patch });
-    toast(`Spostato in "${STAGES[i + 1][1]}"`);
+    const i = STAGES.findIndex((s) => s[0] === t?.stage);
+    const j = i + (+el.dataset.dir || 1);
+    if (i < 0 || j < 0 || j >= STAGES.length) return;
+    await setTopicStage(t, STAGES[j][0]);
   },
+  'topic-advance': async (el) => { el.dataset.dir = '1'; await runAction('topic-move', el); },
+  'topic-stage': async (el) => { const t = store.get(el.dataset.id); if (t && el.value !== t.stage) await setTopicStage(t, el.value); },
 });

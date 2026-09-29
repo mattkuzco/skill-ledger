@@ -1,5 +1,5 @@
 import * as store from '../store.js';
-import { esc, today, relDue, plural, toast, debounce, stageLabel, stageVar, fmtDate } from '../util.js';
+import { esc, today, relDue, plural, toast, debounce, stageLabel, stageVar, fmtDate, STAGES } from '../util.js';
 import { newCardSrs, isCardDue, TOPIC_LADDER, describe, stateOf } from '../srs.js';
 import { topicPresetId } from '../presets.js';
 import { renderMarkdown, excerpt } from '../md.js';
@@ -35,7 +35,7 @@ export function renderTopic(id, params) {
   <header class="topic-head">
     <div class="row between wrap gap">
       <div class="grow">
-        <span class="eyebrow stage-eyebrow"><i style="background:var(${stageVar(t.stage)})"></i>${stageLabel(t.stage)}</span>
+        <label class="eyebrow stage-eyebrow stage-pick" title="Cambia fase"><i style="background:var(${stageVar(t.stage)})"></i><select data-change="topic-stage" data-id="${t.id}" aria-label="Fase dell'argomento">${STAGES.map(([k, l]) => `<option value="${k}" ${k === t.stage ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         <h1>${esc(t.title)}</h1>
         <div class="meta big">
           ${areaChip(t.areaId, { link: true })}
