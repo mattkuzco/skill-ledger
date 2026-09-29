@@ -22,6 +22,7 @@ function route(r) {
     case 'area': return { nav: 'areas', title: store.get(b)?.name || 'Area', html: () => areasView.renderDetail(b) };
     case 'topic': return { nav: 'areas', title: store.get(b)?.title || 'Argomento', html: () => topicView.renderTopic(b, r.params) };
     case 'board': return { nav: 'areas', title: `Quaderno · ${store.get(b)?.title || ''}`, html: () => topicView.renderBoard(b), mount: () => topicView.mountBoardView(b), editor: true, board: true };
+    case 'pdf': return { nav: 'areas', title: store.get(b)?.name || 'PDF', html: () => topicView.renderPdf(b), mount: () => topicView.mountPdfView(b), editor: true, board: true };
     case 'note': return { nav: 'areas', title: store.get(b)?.title || 'Nota', html: () => topicView.renderNote(b), mount: () => topicView.mountNote(b), editor: true };
     case 'study':
       if (b === 'cards') return { nav: 'study', title: 'Ripasso', html: () => study.renderCards(r.params), focus: true, session: 'cards' };
@@ -124,7 +125,7 @@ function bindEvents() {
 
 onLeave(async (prev) => {
   if (prev.parts[0] === 'note' && prev.parts[1]) await topicView.leaveNote(prev.parts[1]);
-  if (prev.parts[0] === 'board') await topicView.leaveBoard();
+  if (prev.parts[0] === 'board' || prev.parts[0] === 'pdf') await topicView.leaveBoard();
 });
 
 // "Condividi → Skill Ledger" from Chrome or another Android app opens ./?share_url=…&share_text=…

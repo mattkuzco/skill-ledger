@@ -603,3 +603,14 @@ body.board-mode .topbar, body.board-mode .tabbar { display: none; }
 .link-go { color: var(--muted, #8A93A4); flex: none; }
 .link-row .btn { flex: none; }
 .link-form .modal-foot .btn .ico { margin-right: 4px; }
+
+/* ---------- writing on PDFs ---------- */
+.pdf-title { font: 600 15px/1.2 var(--f-body, inherit); min-width: 0; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pdf-page { padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--muted); min-width: 64px; text-align: center; }
+.pdf-page:empty { display: none; }
+.meta .inked { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); }
+.meta .inked .ico { width: 13px; height: 13px; }
+.pdf-open .center { justify-content: center; }
+.pdf-open .btn .ico, .link-main .ico { margin-right: 4px; }
+.board-hint.error-hint b { color: var(--danger); }
+@media (max-width: 700px) { .pdf-title { max-width: 60vw; order: 3; flex-basis: 100%; } }

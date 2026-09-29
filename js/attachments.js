@@ -151,6 +151,9 @@ export async function addBoardImage(topicId, file, { cx, cy, maxW = 800 }) {
 
 export async function removeAttachment(id) {
   const link = kindOf(store.get(id)?.mime) === 'link';
+  // handwriting made on a PDF goes with it
+  const ink = store.all('tile').filter((t) => t.docId === id).map((t) => t.id);
+  if (ink.length) await store.remove(ink);
   await store.remove(id);
   if (link) return;
   await store.deleteBlob(id);
@@ -175,6 +178,7 @@ const ICONS = {
   mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
   video: '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.1 1.1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.1-1.1"/>',
+  pen: '<path d="M4 20l1-4L16 5l3 3L8 19z"/><path d="M14 7l3 3"/>',
   ext: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
   clip: '<path d="M20 12.5l-7.8 7.8a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4L15 7.9"/>',
 };
@@ -188,6 +192,8 @@ export function addButtons(topicId) {
     <button class="btn" data-action="link-new" data-topic="${topicId}">${icon('link')}Aggiungi link</button>`;
 }
 
+// Does this PDF have handwriting on it? (tiles written from the PDF view carry docId)
+const inkedPages = (id) => store.all('tile').some((t) => t.docId === id && t.s?.length);
 const origin = (a) => { const n = a.noteId && store.get(a.noteId); return n ? ` · da "${esc(n.title || 'nota')}"` : ''; };
 
 export function attachmentsSections(topicId) {
@@ -226,8 +232,19 @@ export function attachmentsSections(topicId) {
       </a>
       <button class="btn sm ghost" data-action="link-edit" data-id="${a.id}" aria-label="Modifica link">⋯</button>
     </div>`).join('')}</div>`));
-  if (g.pdf.length) out.push(sec('Documenti PDF', g.pdf.length, `<div class="list">${g.pdf.map((a) => `
-    <button class="list-row" data-action="att-open" data-id="${a.id}"><span class="pdf-badge mono">PDF</span><span class="grow"><span class="block">${esc(a.name)}</span><span class="meta"><span>${fmtSize(a.size)}</span>${origin(a)}</span></span></button>`).join('')}</div>`));
+  if (g.pdf.length) out.push(sec('Documenti PDF', g.pdf.length, `<div class="list">${g.pdf.map((a) => {
+    const inked = inkedPages(a.id);
+    return `
+    <div class="list-row link-row">
+      <a class="link-main" href="#/pdf/${a.id}" title="Apri e scrivi sul PDF">
+        <span class="pdf-badge mono">PDF</span>
+        <span class="grow"><span class="block link-title">${esc(a.name)}</span>
+          <span class="meta"><span>${fmtSize(a.size)}</span>${inked ? `<span class="inked">${icon('pen')}con appunti a mano</span>` : ''}${origin(a)}</span></span>
+        <span class="link-go" aria-hidden="true">${icon('pen')}</span>
+      </a>
+      <button class="btn sm ghost" data-action="att-open" data-id="${a.id}" aria-label="Dettagli">⋯</button>
+    </div>`;
+  }).join('')}</div>`));
   return out.join('');
 }
 
@@ -289,7 +306,10 @@ export async function openViewer(id) {
   const u = await objectUrl(id);
   if (!isModalOpen()) return;
   const body = !u ? '<p class="muted pad">File non disponibile su questo dispositivo. Accedi alla sincronizzazione per scaricarlo.</p>'
-    : kind === 'pdf' ? `<div class="pdf-open"><p>PDF · ${fmtSize(a.size)}</p><a class="btn primary" href="${u}" target="_blank" rel="noopener">Apri il PDF</a></div>`
+    : kind === 'pdf' ? `<div class="pdf-open"><p>PDF · ${fmtSize(a.size)}${inkedPages(a.id) ? ' · con appunti a mano' : ''}</p>
+        <div class="row gap wrap center">${location.hash.startsWith(`#/pdf/${a.id}`) ? '' : `<a class="btn primary" href="#/pdf/${a.id}" data-action="close-modal">${icon('pen')}Scrivi sul PDF</a>`}
+        <a class="btn" href="${u}" target="_blank" rel="noopener">${icon('ext')}Apri l'originale</a></div>
+        <p class="hint">Gli appunti a mano restano nell'app: il file originale non viene modificato.</p></div>`
     : kind === 'video' ? `<video src="${u}" controls playsinline autoplay></video>`
     : kind === 'audio' ? `<div class="audio-big">${icon('mic')}<audio src="${u}" controls autoplay></audio></div>`
     : `<img src="${u}" alt="${esc(a.name)}">`;

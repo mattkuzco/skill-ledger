@@ -12,6 +12,7 @@ import * as ai from '../ai.js';
 import * as att from '../attachments.js';
 import * as inkMod from '../ink.js';
 import * as board from '../board.js';
+import { openPdf } from '../pdfdoc.js';
 
 const TABS = [['notes', 'Note'], ['files', 'Allegati'], ['cards', 'Flashcard'], ['quiz', 'Quiz']];
 
@@ -466,6 +467,55 @@ export function mountBoardView(topicId) {
   if (hint) root.querySelector('[data-board-stage]').addEventListener('pointerdown', () => hint.remove(), { once: true });
 }
 
+/* ---------- writing on a PDF (same pen engine as the Quaderno) ---------- */
+export function renderPdf(id) {
+  const a = store.get(id);
+  const topicId = a?.topicId || (a?.noteId && store.get(a.noteId)?.topicId);
+  if (!a || att.kindOf(a.mime) !== 'pdf' || !store.get(topicId)) return emptyState('PDF non trovato', 'Forse è stato eliminato.', '<a class="btn" href="#/areas">Torna alle aree</a>');
+  const t = store.get(topicId);
+  return `<div class="board-view pdf-view">
+    <div class="board-top">
+      <a class="btn ghost" href="#/topic/${t.id}?tab=files">← ${esc(t.title)}</a>
+      <b class="pdf-title" title="${esc(a.name)}">${esc(a.name)}</b>
+      <span class="small muted" data-board-saved>Salvato</span>
+      <div class="btn-group push">
+        <span class="pdf-page mono small" data-pdf-page></span>
+        <button class="btn sm" data-action="att-open" data-id="${a.id}" title="Rinomina, apri l'originale o elimina">⋯</button>
+      </div>
+    </div>
+    <div class="ink-bar board-bar" data-board-bar></div>
+    <div class="board-stage" data-board-stage>
+      <canvas class="board-base" data-board-base></canvas>
+      <canvas class="board-over" data-board-over></canvas>
+      <div class="board-hint" data-pdf-status><b>Apro il PDF…</b></div>
+    </div>
+  </div>`;
+}
+
+export async function mountPdfView(id) {
+  const root = document.querySelector('.pdf-view');
+  const a = store.get(id);
+  if (!root || !a) return;
+  const t = store.get(a.topicId || store.get(a.noteId)?.topicId);
+  const status = root.querySelector('[data-pdf-status]');
+  const stillHere = () => document.body.contains(root);
+  boardEditor?.destroy(); boardEditor = null;
+  try {
+    let blob = await att.getBlob(id);
+    if (!blob) throw new Error(a.remote ? 'Il PDF non è ancora scaricato su questo dispositivo: controlla la connessione e la sincronizzazione.' : 'Il PDF è solo sull\'altro dispositivo: aprilo lì e sincronizza.');
+    const { doc, pages } = await openPdf(id, blob);
+    blob = null;
+    if (!stillHere()) { doc.destroy(); return; }
+    status.remove();
+    boardEditor = board.mountBoard(root, t, { pdf: { id, doc, pages } });
+  } catch (e) {
+    console.error(e);
+    if (!stillHere()) return;
+    status.innerHTML = `<b>Non riesco ad aprire questo PDF.</b><span>${esc(e.message || '')}</span>`;
+    status.classList.add('error-hint');
+  }
+}
+
 export async function leaveBoard() {
   if (!boardEditor) return;
   await boardEditor.saveNow();
@@ -569,8 +619,11 @@ registerActions({
   'att-open': (el) => { if (el.dataset.id) att.openViewer(el.dataset.id); },
   'att-delete': async (el) => {
     const a = store.get(el.dataset.id);
+    const open = location.hash.startsWith(`#/pdf/${el.dataset.id}`);
+    if (open) { boardEditor?.destroy(); boardEditor = null; } // don't save ink for a PDF being deleted
     await att.removeAttachment(el.dataset.id);
     closeModal();
+    if (open) navigate(`#/topic/${a?.topicId}?tab=files`, { skipLeave: true });
     toast(att.kindOf(a?.mime) === 'link' ? 'Link eliminato' : 'Allegato eliminato');
     if (a?.noteId) refreshAttachments(a.noteId);
   },

@@ -7,17 +7,23 @@
 // Photos placed on the board are attachments with { board: true, x, y, bw, bh } in world units.
 // Board settings live on the topic: topic.board = { paper, dark }.
 // dark = black paper; strokes keep their colour and are shown in a light version (see ink.js).
+//
+// The same editor writes on PDFs (see pdfdoc.js): then the pages are drawn under the ink and
+// the tiles carry { docId: <attachment id> } so they are kept apart from the topic's Quaderno.
 
 import * as store from './store.js';
 import { drawStroke, penSegment, penTail, penStyle, penWidth, PEN_COLORS, HL_COLORS, SIZES, paperColor, shownColor, lineColor } from './ink.js';
 import * as att from './attachments.js';
 import { today, toast, debounce } from './util.js';
+import { pdfLayer } from './pdfdoc.js';
 
 const TILE = 1024;
 const MIN_Z = 0.08;
 const MAX_Z = 6;
 
-export const tilesOf = (topicId) => store.all('tile').filter((t) => t.topicId === topicId);
+export const tilesOf = (topicId) => store.all('tile').filter((t) => t.topicId === topicId && !t.docId);
+export const docTilesOf = (docId) => store.all('tile').filter((t) => t.docId === docId);
+export const docStrokeTotal = (docId) => docTilesOf(docId).reduce((n, t) => n + (t.s?.length || 0), 0);
 export const boardImagesOf = (topicId) => store.all('attachment').filter((a) => a.topicId === topicId && a.board);
 export const strokeTotal = (topicId) => tilesOf(topicId).reduce((n, t) => n + (t.s?.length || 0), 0);
 export const hasContent = (topicId) => strokeTotal(topicId) > 0 || boardImagesOf(topicId).length > 0;
@@ -90,9 +96,10 @@ function drawPattern(g, paper, view, W, H, dpr, { faint = false, dark = false } 
   g.restore();
 }
 
-function drawWorld(g, topicId, tiles, images, view, W, H, dpr, { onBitmap, skipStroke, dark = false } = {}) {
+function drawWorld(g, topicId, tiles, images, view, W, H, dpr, { onBitmap, skipStroke, dark = false, underlay = null } = {}) {
   const vis = [view.x, view.y, view.x + W / (view.z * dpr), view.y + H / (view.z * dpr)];
   g.setTransform(view.z * dpr, 0, 0, view.z * dpr, -view.x * view.z * dpr, -view.y * view.z * dpr);
+  underlay?.(g, vis);
   for (const a of images) {
     if (!overlaps(imgBox(a), vis)) continue;
     const bmp = bitmapFor(a, onBitmap);
@@ -158,8 +165,13 @@ export async function regionBlobs(topicId, { maxRegions = 16 } = {}) {
 }
 
 /* ---------- the editor ---------- */
-export function mountBoard(root, topic, { onAction } = {}) {
+// pdf: { id, doc, pages } to write on a PDF instead of the topic's Quaderno.
+export function mountBoard(root, topic, { pdf = null } = {}) {
   const topicId = topic.id;
+  const docId = pdf?.id || '';
+  let dead = false;
+  const tilesHere = () => (docId ? docTilesOf(docId) : tilesOf(topicId));
+  const imagesHere = () => (docId ? [] : boardImagesOf(topicId));
   const stage = root.querySelector('[data-board-stage]');
   const base = root.querySelector('[data-board-base]');
   const over = root.querySelector('[data-board-over]');
@@ -185,19 +197,36 @@ export function mountBoard(root, topic, { onAction } = {}) {
   const dirty = new Set();
   const loadTiles = () => {
     const keyOfId = new Map([...tiles].filter(([, t]) => t.id).map(([k, t]) => [t.id, k]));
-    for (const t of tilesOf(topicId)) {
+    for (const t of tilesHere()) {
       const key = keyOfId.get(t.id) || t.id;
       if (dirty.has(key)) continue;
       tiles.set(key, { ...t, s: (t.s || []).slice() });
     }
     for (const [key, t] of tiles) if (t.id && !store.get(t.id) && !dirty.has(key)) tiles.delete(key);
   };
-  let images = boardImagesOf(topicId).map((a) => ({ ...a }));
+  let images = imagesHere().map((a) => ({ ...a }));
   loadTiles();
 
-  let paper = topic.board?.paper || 'grid';
-  let dark = !!topic.board?.dark;
-  const applyBg = () => { stage.style.background = paperColor(dark); root.classList.toggle('dark-paper', dark); };
+  // PDF pages under the ink; they render in the background and never while you write.
+  const layer = pdf ? pdfLayer(pdf.doc, pdf.pages, {
+    onReady: () => requestRedraw(),
+    isBusy: () => !!active || !!snap || Date.now() - lastPenUp < 500,
+  }) : null;
+  if (layer) stage.pdfLayer = layer; // for tests
+  let rr = 0;
+  function requestRedraw() {
+    if (rr) return;
+    rr = requestAnimationFrame(() => {
+      rr = 0;
+      if (active || snap || Date.now() - lastPenUp < 600) { setTimeout(requestRedraw, 250); return; }
+      redraw();
+    });
+  }
+
+  let paper = layer ? 'blank' : topic.board?.paper || 'grid';
+  let dark = layer ? false : !!topic.board?.dark;
+  const background = () => (layer ? layer.gutter : paperColor(dark));
+  const applyBg = () => { stage.style.background = background(); root.classList.toggle('dark-paper', dark); };
   applyBg();
   const tool = { t: 'p', c: PEN_COLORS[0], hc: HL_COLORS[0], size: 1, mode: 'draw' }; // mode: draw | erase | select | hand
   let fingerMode = store.getMeta('inkFinger', null);
@@ -207,7 +236,8 @@ export function mountBoard(root, topic, { onAction } = {}) {
   let selected = null; // image id
 
   // View: world coordinate at the top-left and zoom (css px per world unit).
-  const saved = store.getMeta(`board:${topicId}`, null);
+  const viewKey = docId ? `pdfview:${docId}` : `board:${topicId}`;
+  const saved = store.getMeta(viewKey, null);
   const view = saved ? { ...saved } : { x: -60, y: -60, z: 1 };
 
   /* --- sizing & drawing --- */
@@ -222,6 +252,7 @@ export function mountBoard(root, topic, { onAction } = {}) {
     redraw();
   }
   function fitDefault(cssW) {
+    if (layer) { fitPageWidth(layer.pages[0], cssW, H / dpr); return; }
     const b = contentBounds(topicId);
     if (b) fitTo(b, cssW);
     else { view.z = Math.min(1.4, Math.max(0.6, cssW / 1100)); view.x = -40; view.y = -40; }
@@ -232,13 +263,33 @@ export function mountBoard(root, topic, { onAction } = {}) {
     view.x = b[0] - pad / view.z;
     view.y = b[1] - pad / view.z;
   }
+  // PDF: page width fills the screen; y = world y shown at the top (default: top of the page)
+  function fitPageWidth(pg, cssW = W / dpr, cssH = H / dpr, y = null) {
+    const pad = cssW < 700 ? 6 : 16;
+    view.z = Math.min(MAX_Z, Math.max(MIN_Z, (cssW - pad * 2) / pg.w));
+    view.x = pg.x + pg.w / 2 - cssW / 2 / view.z;
+    view.y = y === null ? pg.y - pad / view.z : y;
+  }
+  function updatePage() {
+    if (!layer) return;
+    const el = root.querySelector('[data-pdf-page]');
+    if (!el) return;
+    const pg = layer.pageAt(view.y + H / dpr / 2 / view.z);
+    const txt = `${pg.n} / ${layer.pages.length}`;
+    if (el.textContent !== txt) el.textContent = txt;
+  }
   const allTiles = () => [...tiles.values()];
   function redraw() {
     if (!W) return;
     g.setTransform(1, 0, 0, 1, 0, 0);
-    g.fillStyle = paperColor(dark); g.fillRect(0, 0, W, H);
+    g.fillStyle = background(); g.fillRect(0, 0, W, H);
     drawPattern(g, paper, view, W, H, dpr, { dark });
-    drawWorld(g, topicId, allTiles(), images, view, W, H, dpr, { dark, onBitmap: () => requestAnimationFrame(redraw) });
+    drawWorld(g, topicId, allTiles(), images, view, W, H, dpr, {
+      dark, onBitmap: () => requestAnimationFrame(redraw),
+      underlay: layer ? (gg, vis) => layer.draw(gg, vis, view, dpr) : null,
+    });
+    layer?.update(view, W, H, dpr);
+    updatePage();
     if (active?.kind === 'draw' && active.st.t === 'p') { worldOn(g); drawStroke(g, active.st, 1, dark); g.setTransform(1, 0, 0, 1, 0, 0); }
     drawOverlay();
     const zl = zoomLabel(); if (zl) zl.textContent = `${Math.round(view.z * 100)}%`;
@@ -304,12 +355,13 @@ export function mountBoard(root, topic, { onAction } = {}) {
     if (!snap) return;
     const ratio = view.z / snap.view.z;
     g.setTransform(1, 0, 0, 1, 0, 0);
-    g.fillStyle = paperColor(dark); g.fillRect(0, 0, W, H);
+    g.fillStyle = background(); g.fillRect(0, 0, W, H);
     g.drawImage(snap.c, (snap.view.x - view.x) * view.z * dpr, (snap.view.y - view.y) * view.z * dpr, W * ratio, H * ratio);
     const zl = zoomLabel(); if (zl) zl.textContent = `${Math.round(view.z * 100)}%`;
+    updatePage();
   }
   const endGesture = debounce(() => { snap = null; redraw(); saveView(); }, 90);
-  const saveView = debounce(() => store.setMeta(`board:${topicId}`, { x: view.x, y: view.y, z: view.z }), 400);
+  const saveView = debounce(() => store.setMeta(viewKey, { x: view.x, y: view.y, z: view.z }), 400);
   function zoomAt(cssX, cssY, factor) {
     const nz = Math.min(MAX_Z, Math.max(MIN_Z, view.z * factor));
     const wx = view.x + cssX / view.z; const wy = view.y + cssY / view.z;
@@ -333,7 +385,7 @@ export function mountBoard(root, topic, { onAction } = {}) {
     const tx = Math.floor(st.p[0] / TILE); const ty = Math.floor(st.p[1] / TILE);
     for (const [key, t] of tiles) if (t.tx === tx && t.ty === ty) return key;
     const key = `new:${tx},${ty}:${Date.now()}`;
-    tiles.set(key, { topicId, tx, ty, s: [] });
+    tiles.set(key, { topicId, ...(docId ? { docId } : {}), tx, ty, s: [] });
     return key;
   }
 
@@ -421,6 +473,7 @@ export function mountBoard(root, topic, { onAction } = {}) {
       else { beginGesture(); active = { kind: 'pan', ptype: ev.pointerType, id: ev.pointerId, sx: cx, sy: cy, v0: { ...view } }; }
       return;
     }
+    layer?.pause(); // PDF rendering waits: the pen comes first
     const erasing = tool.mode === 'erase' || (ev.pointerType === 'pen' && (ev.buttons & 34));
     if (erasing) { active = { kind: 'erase', ptype: ev.pointerType, id: ev.pointerId, removed: [], last: [x, y] }; eraseAt(x, y, active.removed); return; }
     const st = tool.t === 'h'
@@ -546,19 +599,22 @@ export function mountBoard(root, topic, { onAction } = {}) {
 
   let spaceDown = false;
   const onKey = (ev) => {
-    if (ev.target.matches('input, textarea, select')) return;
+    if (ev.target.matches?.('input, textarea, select')) return;
     if (ev.type === 'keydown' && ev.code === 'Space') { spaceDown = true; stage.style.cursor = 'grab'; ev.preventDefault(); }
     if (ev.type === 'keyup' && ev.code === 'Space') { spaceDown = false; stage.style.cursor = ''; }
     if (ev.type !== 'keydown') return;
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'z') { ev.preventDefault(); ev.shiftKey ? doRedo() : doUndo(); }
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'y') { ev.preventDefault(); doRedo(); }
     if ((ev.key === 'Delete' || ev.key === 'Backspace') && selected) { ev.preventDefault(); deleteSelected(); }
+    const step = { PageDown: 0.9, PageUp: -0.9, ArrowDown: 0.15, ArrowUp: -0.15 }[ev.key];
+    if (step && !active) { ev.preventDefault(); view.y += (step * H) / dpr / view.z; redraw(); saveView(); }
   };
   document.addEventListener('keydown', onKey);
   document.addEventListener('keyup', onKey);
 
   /* --- photos --- */
   async function addImages(files) {
+    if (layer) { toast('Sui PDF puoi scrivere e evidenziare; le foto vanno nel Quaderno.'); return; }
     const list = [...files].filter((f) => f.type.startsWith('image/'));
     if (!list.length) { toast('Sul quaderno puoi inserire solo immagini. I PDF vanno allegati alle note.', 'bad'); return; }
     let k = 0;
@@ -606,7 +662,7 @@ export function mountBoard(root, topic, { onAction } = {}) {
         <button type="button" data-b="tool" data-v="p" aria-pressed="${is('draw', 'p')}" title="Penna">${svg('p')}<span>Penna</span></button>
         <button type="button" data-b="tool" data-v="h" aria-pressed="${is('draw', 'h')}" title="Evidenziatore">${svg('h')}<span>Evidenz.</span></button>
         <button type="button" data-b="mode" data-v="erase" aria-pressed="${is('erase')}" title="Gomma (o tasto laterale della penna)">${svg('e')}<span>Gomma</span></button>
-        <button type="button" data-b="mode" data-v="select" aria-pressed="${is('select')}" title="Seleziona e sposta le foto">${svg('s')}<span>Seleziona</span></button>
+        ${layer ? '' : `<button type="button" data-b="mode" data-v="select" aria-pressed="${is('select')}" title="Seleziona e sposta le foto">${svg('s')}<span>Seleziona</span></button>`}
         <button type="button" data-b="mode" data-v="hand" aria-pressed="${is('hand')}" title="Sposta il foglio">${svg('hand')}<span>Sposta</span></button>
       </div>
       ${tool.mode === 'draw' ? `
@@ -619,13 +675,13 @@ export function mountBoard(root, topic, { onAction } = {}) {
       </div>
       <div class="ink-group">
         <button type="button" data-b="zoom" data-v="0.8" title="Riduci">−</button>
-        <button type="button" data-b="fit" title="Mostra tutto">${svg('fit')}<span data-board-zoom>${Math.round(view.z * 100)}%</span></button>
+        <button type="button" data-b="fit" title="${layer ? 'Adatta la pagina allo schermo' : 'Mostra tutto'}">${svg('fit')}<span data-board-zoom>${Math.round(view.z * 100)}%</span></button>
         <button type="button" data-b="zoom" data-v="1.25" title="Ingrandisci">+</button>
       </div>
       <div class="ink-group">
-        <label class="bar-file" title="Inserisci una foto (fotocamera o galleria)">${svg('img')}<span>Foto</span><input type="file" accept="image/*" multiple data-b-file hidden></label>
+        ${layer ? '' : `<label class="bar-file" title="Inserisci una foto (fotocamera o galleria)">${svg('img')}<span>Foto</span><input type="file" accept="image/*" multiple data-b-file hidden></label>
         <select data-b="paper" aria-label="Tipo di foglio">${[['grid', 'Quadretti'], ['lined', 'Righe'], ['dots', 'Puntini'], ['blank', 'Senza righe']].map(([k, l]) => `<option value="${k}" ${paper === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
-        <select data-b="bg" aria-label="Colore del foglio">${[['light', 'Foglio bianco'], ['dark', 'Foglio nero']].map(([k, l]) => `<option value="${k}" ${(dark ? 'dark' : 'light') === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <select data-b="bg" aria-label="Colore del foglio">${[['light', 'Foglio bianco'], ['dark', 'Foglio nero']].map(([k, l]) => `<option value="${k}" ${(dark ? 'dark' : 'light') === k ? 'selected' : ''}>${l}</option>`).join('')}</select>`}
         <button type="button" data-b="finger" title="Cosa fa il dito sullo schermo">${fingerMode === 'scroll' ? 'Dito: sposta' : 'Dito: scrive'}</button>
       </div>`;
   }
@@ -640,7 +696,11 @@ export function mountBoard(root, topic, { onAction } = {}) {
     if (k === 'redo') return doRedo();
     if (k === 'del-img') return deleteSelected();
     if (k === 'zoom') { zoomAt(W / dpr / 2, H / dpr / 2, +v); redraw(); saveView(); }
-    if (k === 'fit') { const bx = contentBoundsLocal(); if (bx) fitTo(bx); else { view.z = 1; view.x = -40; view.y = -40; } redraw(); saveView(); }
+    if (k === 'fit') {
+      if (layer) { const cy = view.y + H / dpr / 2 / view.z; fitPageWidth(layer.pageAt(cy)); view.y = cy - H / dpr / 2 / view.z; }
+      else { const bx = contentBoundsLocal(); if (bx) fitTo(bx); else { view.z = 1; view.x = -40; view.y = -40; } }
+      redraw(); saveView();
+    }
     if (k === 'finger') { fingerMode = fingerMode === 'scroll' ? 'draw' : 'scroll'; store.setMeta('inkFinger', fingerMode); }
     if (tool.mode !== 'select' && selected) { selected = null; drawOverlay(); }
     stage.dataset.mode = tool.mode;
@@ -664,7 +724,7 @@ export function mountBoard(root, topic, { onAction } = {}) {
   }
 
   /* --- remote changes (another device drew on this board) --- */
-  const signature = () => tilesOf(topicId).map((t) => t.id + t.updated_at).join() + '|' + boardImagesOf(topicId).map((a) => a.id + a.updated_at).join();
+  const signature = () => tilesHere().map((t) => t.id + t.updated_at).join() + '|' + imagesHere().map((a) => a.id + a.updated_at).join();
   let lastSig = signature();
   let remoteTimer = 0;
   function applyRemote() {
@@ -672,13 +732,13 @@ export function mountBoard(root, topic, { onAction } = {}) {
     // redrawing a big board takes a moment: wait until the pen has been still for a bit
     if (active || Date.now() - lastPenUp < 1500) { remoteTimer = setTimeout(applyRemote, 700); return; }
     loadTiles();
-    images = boardImagesOf(topicId).map((a) => ({ ...a }));
+    images = imagesHere().map((a) => ({ ...a }));
     redraw();
   }
   const unsub = store.subscribe((src) => {
     if (src !== 'remote') return;
     const tb = store.get(topicId)?.board || {};
-    const look = (tb.paper || 'grid') !== paper || !!tb.dark !== dark;
+    const look = !layer && ((tb.paper || 'grid') !== paper || !!tb.dark !== dark);
     if (look) { paper = tb.paper || 'grid'; dark = !!tb.dark; applyBg(); renderBar(); }
     const sig = signature();
     if (sig === lastSig && !look) return;
@@ -694,16 +754,17 @@ export function mountBoard(root, topic, { onAction } = {}) {
 
   return {
     saveNow: () => saveTilesNow(),
-    destroy() { ro.disconnect(); unsub(); clearTimeout(remoteTimer); document.removeEventListener('keydown', onKey); document.removeEventListener('keyup', onKey); },
+    destroy() { dead = true; ro.disconnect(); unsub(); clearTimeout(remoteTimer); cancelAnimationFrame(rr); layer?.destroy(); document.removeEventListener('keydown', onKey); document.removeEventListener('keyup', onKey); },
   };
 
   async function saveTilesNow() {
+    if (dead) return; // closed (e.g. the PDF was deleted): nothing more to write
     const keys = [...dirty]; dirty.clear();
     for (const key of keys) {
       const t = tiles.get(key);
       if (!t) continue;
       if (!t.s.length) { if (t.id) await store.remove(t.id); tiles.delete(key); continue; }
-      const rec = await store.put('tile', { id: t.id, topicId, tx: t.tx, ty: t.ty, s: t.s });
+      const rec = await store.put('tile', { id: t.id, topicId, ...(docId ? { docId } : {}), tx: t.tx, ty: t.ty, s: t.s });
       t.id = rec.id;
     }
   }
